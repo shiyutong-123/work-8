@@ -9,6 +9,11 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
 
+def _sanitize_query(data: dict[str, Any]) -> str:
+    """Extract and sanitize query string from dictionary format."""
+    return str(data.get("raw", ""))
+
+
 def flatten(x: Iterable[Any]) -> list[Any]:
     """flatten(sequence) -> list
     Returns a single, flat list which contains all elements retrieved
