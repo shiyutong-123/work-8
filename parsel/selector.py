@@ -22,7 +22,14 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import (
+    MultiDispatch,
+    extract_regex,
+    flatten,
+    iflatten,
+    is_listlike_dispatch,
+    shorten,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -83,6 +90,87 @@ _ctgroup: dict[str, CTGroupValue] = {
 }
 
 
+root_type_dispatch = MultiDispatch()
+
+
+@root_type_dispatch.register(etree._Element)
+def _root_type_element(root: Any, input_type: str | None) -> str:
+    if input_type in {"json", "text"}:
+        raise ValueError(
+            f"Selector got an lxml.etree._Element object as root, "
+            f"and {input_type!r} as type."
+        )
+    return _xml_or_html(input_type)
+
+
+@root_type_dispatch.register(dict)
+def _root_type_dict(root: Any, input_type: str | None) -> str:
+    return "json"
+
+
+@root_type_dispatch.register(list)
+def _root_type_list(root: Any, input_type: str | None) -> str:
+    return "json"
+
+
+def _root_type_fallback(root: Any, input_type: str | None) -> str:
+    if _is_valid_json(root):
+        return "json"
+    return input_type or "json"
+
+
+root_type_dispatch.set_fallback(_root_type_fallback)
+
+
+jmespath_result_dispatch = MultiDispatch()
+
+
+@jmespath_result_dispatch.register(str)
+def _jmespath_make_selector_str(x: str, selector: "Selector", query: str) -> "Selector":
+    return selector.__class__(text=x, _expr=query, type="text")
+
+
+def _jmespath_make_selector_default(x: Any, selector: "Selector", query: str) -> "Selector":
+    return selector.__class__(root=x, _expr=query)
+
+
+jmespath_result_dispatch.set_fallback(_jmespath_make_selector_default)
+
+
+load_json_dispatch = MultiDispatch()
+
+
+@load_json_dispatch.register(str)
+def _load_json_str(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+@load_json_dispatch.register(bytes)
+def _load_json_bytes(text: bytes) -> Any:
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+@load_json_dispatch.register(bytearray)
+def _load_json_bytearray(text: bytearray) -> Any:
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def _load_json_fallback(text: Any) -> Any:
+    return None
+
+
+load_json_dispatch.set_fallback(_load_json_fallback)
+
+
 def _xml_or_html(type_: str | None) -> str:
     return "xml" if type_ == "xml" else "html"
 
@@ -137,7 +225,7 @@ class SelectorList(list[_SelectorType]):
         self, pos: SupportsIndex | slice
     ) -> _SelectorType | SelectorList[_SelectorType]:
         o = super().__getitem__(pos)
-        if isinstance(pos, slice):
+        if type(pos) is slice:
             return self.__class__(typing.cast("SelectorList[_SelectorType]", o))
         return typing.cast("_SelectorType", o)
 
@@ -348,16 +436,7 @@ def _get_root_and_type_from_text(
 
 
 def _get_root_type(root: Any, *, input_type: str | None) -> str:
-    if isinstance(root, etree._Element):
-        if input_type in {"json", "text"}:
-            raise ValueError(
-                f"Selector got an lxml.etree._Element object as root, "
-                f"and {input_type!r} as type."
-            )
-        return _xml_or_html(input_type)
-    if isinstance(root, (dict, list)) or _is_valid_json(root):
-        return "json"
-    return input_type or "json"
+    return root_type_dispatch(root, input_type=input_type)
 
 
 def _is_valid_json(text: str) -> bool:
@@ -368,13 +447,8 @@ def _is_valid_json(text: str) -> bool:
     return True
 
 
-def _load_json_or_none(text: str) -> Any:
-    if isinstance(text, (str, bytes, bytearray)):
-        try:
-            return json.loads(text)
-        except ValueError:
-            return None
-    return None
+def _load_json_or_none(text: Any) -> Any:
+    return load_json_dispatch(text)
 
 
 class Selector:
@@ -447,7 +521,7 @@ class Selector:
         if text is None and not body and root is _NOT_SET:
             raise ValueError("Selector needs text, body, or root arguments")
 
-        if text is not None and not isinstance(text, str):
+        if text is not None and type(text) is not str:
             msg = f"text argument should be of type str, got {text.__class__}"
             raise TypeError(msg)
 
@@ -457,7 +531,7 @@ class Selector:
                     "Selector got both text and root, root is being ignored.",
                     stacklevel=2,
                 )
-            if not isinstance(text, str):
+            if type(text) is not str:
                 msg = f"text argument should be of type str, got {text.__class__}"
                 raise TypeError(msg)
 
@@ -470,7 +544,7 @@ class Selector:
             self.root = root
             self.type = type
         elif body:
-            if not isinstance(body, (bytes, bytearray)):
+            if type(body) not in (bytes, bytearray):
                 msg = f"body argument should be of type bytes or bytearray, got {body.__class__}"
                 raise TypeError(msg)
             root, type = _get_root_and_type_from_bytes(  # noqa: A001
@@ -517,6 +591,30 @@ class Selector:
             huge_tree=huge_tree,
         )
 
+    def __call__(self, query: str, namespaces: Mapping[str, str] | None = None) -> SelectorList[Self]:
+        """
+        Find nodes matching the given query and return the result as a
+        :class:`SelectorList` instance with all elements flattened.
+
+        This method mimics the behavior of ``lxml.etree.Element.__call__``,
+        which is equivalent to calling ``findall()`` on the element.
+
+        ``query`` is a string containing the XPath or CSS selector to apply.
+        If the query starts with ``/`` or ``//``, it's treated as XPath;
+        otherwise it's treated as a CSS selector.
+
+        ``namespaces`` is an optional ``prefix: namespace-uri`` mapping for
+        additional prefixes to those registered with ``register_namespace(prefix, uri)``.
+        """
+        if self.type in ("html", "xml"):
+            if query.startswith("/") or query.startswith("//") or ":" in query.split("/")[0].split("[")[0]:
+                return self.xpath(query, namespaces=namespaces)
+            return self.css(query)
+        elif self.type == "text":
+            return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
+        else:
+            return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
+
     def jmespath(
         self,
         query: str,
@@ -536,27 +634,21 @@ class Selector:
             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
         if self.type == "json":
-            if isinstance(self.root, str):
-                # Selector received a JSON string as root.
+            if type(self.root) is str:
                 data = _load_json_or_none(self.root)
             else:
                 data = self.root
         else:
-            assert self.type in {"html", "xml"}  # nosec
+            assert self.type in {"html", "xml"}
             data = _load_json_or_none(self.root.text)
 
         result = jmespath.search(query, data, **kwargs)
         if result is None:
             result = []
-        elif not isinstance(result, list):
+        elif type(result) is not list:
             result = [result]
 
-        def make_selector(x: Any) -> Selector:  # closure function
-            if isinstance(x, str):
-                return self.__class__(text=x, _expr=query, type="text")
-            return self.__class__(root=x, _expr=query)
-
-        result = [make_selector(x) for x in result]
+        result = [jmespath_result_dispatch(x, selector=self, query=query) for x in result]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
     def xpath(
@@ -608,7 +700,7 @@ class Selector:
         except etree.XPathError as exc:
             raise ValueError(f"XPath error: {exc} in {query}")
 
-        if not isinstance(result, list):
+        if type(result) is not list:
             result = [result]
 
         result = [
