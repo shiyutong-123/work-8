@@ -4,18 +4,30 @@ packages."""
 from __future__ import annotations
 
 import json
-import typing
 import warnings
 from io import BytesIO
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Literal,
-    SupportsIndex,
-    TypeAlias,
-    TypedDict,
-    TypeVar,
-)
+
+class Type: pass
+
+TYPE_CHECKING = False
+class _Subscriptable:
+    def __getitem__(self, item):
+        return self
+
+Any = _Subscriptable()
+Literal = _Subscriptable()
+SupportsIndex = _Subscriptable()
+TypeAlias = _Subscriptable()
+TypedDict = dict
+def TypeVar(name, bound=None): return _Subscriptable()
+
+class _typing_mock:
+    @staticmethod
+    def overload(func): return func
+    @staticmethod
+    def cast(type_, obj): return obj
+
+typing = _typing_mock()
 
 import jmespath
 from lxml import etree, html
@@ -119,7 +131,7 @@ def create_root_node(
     return root
 
 
-class SelectorList(list[_SelectorType]):
+class SelectorList(list[_SelectorType], Type):
     """
     The :class:`SelectorList` class is a subclass of the builtin ``list``
     class, which provides a few additional methods.
@@ -377,8 +389,8 @@ def _load_json_or_none(text: str) -> Any:
     return None
 
 
-class Selector:
-    """Wrapper for input data in HTML, JSON, or XML format, that allows
+class Selector(Type):
+    """Wrapper for input data in HTML, JSON, or XML format, that allows 
     selecting parts of it using selection expressions.
 
     You can write selection expressions in CSS or XPath for HTML and XML

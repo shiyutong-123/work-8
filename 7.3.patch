@@ -1,0 +1,131 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..e5c02b5 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,7 +1,6 @@
+ from __future__ import annotations
+ 
+ from functools import lru_cache
+-from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+ from cssselect import HTMLTranslator as OriginalHTMLTranslator
+@@ -9,12 +8,18 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
++from parsel.selector import Type
++
++TYPE_CHECKING = False
++Any = object
++class Protocol: pass
++
+ if TYPE_CHECKING:
+     # typing.Self requires Python 3.11
+     from typing_extensions import Self
+ 
+ 
+-class XPathExpr(OriginalXPathExpr):
++class XPathExpr(OriginalXPathExpr, Type):
+     textnode: bool = False
+     attribute: str | None = None
+ 
+@@ -66,7 +71,7 @@ class XPathExpr(OriginalXPathExpr):
+ 
+ 
+ # e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
+-class TranslatorProtocol(Protocol):
++class TranslatorProtocol(Protocol, Type):
+     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
+         pass
+ 
+@@ -74,7 +79,7 @@ class TranslatorProtocol(Protocol):
+         pass
+ 
+ 
+-class TranslatorMixin:
++class TranslatorMixin(Type):
+     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
+ 
+     Currently supported pseudo-elements are ``::text`` and ``::attr(ATTR_NAME)``.
+@@ -126,13 +131,13 @@ class TranslatorMixin:
+         return XPathExpr.from_xpath(xpath, textnode=True)
+ 
+ 
+-class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
++class GenericTranslator(TranslatorMixin, OriginalGenericTranslator, Type):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+ 
+ 
+-class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
++class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator, Type):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..702999b 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -4,18 +4,30 @@ packages."""
+ from __future__ import annotations
+ 
+ import json
+-import typing
+ import warnings
+ from io import BytesIO
+-from typing import (
+-    TYPE_CHECKING,
+-    Any,
+-    Literal,
+-    SupportsIndex,
+-    TypeAlias,
+-    TypedDict,
+-    TypeVar,
+-)
++
++class Type: pass
++
++TYPE_CHECKING = False
++class _Subscriptable:
++    def __getitem__(self, item):
++        return self
++
++Any = _Subscriptable()
++Literal = _Subscriptable()
++SupportsIndex = _Subscriptable()
++TypeAlias = _Subscriptable()
++TypedDict = dict
++def TypeVar(name, bound=None): return _Subscriptable()
++
++class _typing_mock:
++    @staticmethod
++    def overload(func): return func
++    @staticmethod
++    def cast(type_, obj): return obj
++
++typing = _typing_mock()
+ 
+ import jmespath
+ from lxml import etree, html
+@@ -119,7 +131,7 @@ def create_root_node(
+     return root
+ 
+ 
+-class SelectorList(list[_SelectorType]):
++class SelectorList(list[_SelectorType], Type):
+     """
+     The :class:`SelectorList` class is a subclass of the builtin ``list``
+     class, which provides a few additional methods.
+@@ -377,8 +389,8 @@ def _load_json_or_none(text: str) -> Any:
+     return None
+ 
+ 
+-class Selector:
+-    """Wrapper for input data in HTML, JSON, or XML format, that allows
++class Selector(Type):
++    """Wrapper for input data in HTML, JSON, or XML format, that allows 
+     selecting parts of it using selection expressions.
+ 
+     You can write selection expressions in CSS or XPath for HTML and XML

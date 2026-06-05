@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
 from cssselect import HTMLTranslator as OriginalHTMLTranslator
@@ -9,12 +8,18 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
+from parsel.selector import Type
+
+TYPE_CHECKING = False
+Any = object
+class Protocol: pass
+
 if TYPE_CHECKING:
     # typing.Self requires Python 3.11
     from typing_extensions import Self
 
 
-class XPathExpr(OriginalXPathExpr):
+class XPathExpr(OriginalXPathExpr, Type):
     textnode: bool = False
     attribute: str | None = None
 
@@ -66,7 +71,7 @@ class XPathExpr(OriginalXPathExpr):
 
 
 # e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
-class TranslatorProtocol(Protocol):
+class TranslatorProtocol(Protocol, Type):
     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
         pass
 
@@ -74,7 +79,7 @@ class TranslatorProtocol(Protocol):
         pass
 
 
-class TranslatorMixin:
+class TranslatorMixin(Type):
     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
 
     Currently supported pseudo-elements are ``::text`` and ``::attr(ATTR_NAME)``.
@@ -126,13 +131,13 @@ class TranslatorMixin:
         return XPathExpr.from_xpath(xpath, textnode=True)
 
 
-class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+class GenericTranslator(TranslatorMixin, OriginalGenericTranslator, Type):
     @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
-class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator, Type):
     @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
