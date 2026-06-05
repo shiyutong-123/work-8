@@ -7,6 +7,7 @@ import json
 import typing
 import warnings
 from io import BytesIO
+from threading import RLock
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -21,7 +22,12 @@ import jmespath
 from lxml import etree, html
 from packaging.version import Version
 
-from .csstranslator import GenericTranslator, HTMLTranslator
+from .csstranslator import (
+    CSSTranslatorType,
+    GenericTranslator,
+    HTMLTranslator,
+    get_css_translator_snapshot,
+)
 from .utils import extract_regex, flatten, iflatten, shorten
 from .xml import _force_fix
 
@@ -66,19 +72,19 @@ class SafeXMLParser(etree.XMLParser):
 
 class CTGroupValue(TypedDict):
     _parser: type[etree.XMLParser | html.HTMLParser]
-    _csstranslator: GenericTranslator | HTMLTranslator
+    _csstranslator_type: CSSTranslatorType
     _tostring_method: _TostringMethodType
 
 
 _ctgroup: dict[str, CTGroupValue] = {
     "html": {
         "_parser": html.HTMLParser,
-        "_csstranslator": HTMLTranslator(),
+        "_csstranslator_type": "html",
         "_tostring_method": "html",
     },
     "xml": {
         "_parser": SafeXMLParser,
-        "_csstranslator": GenericTranslator(),
+        "_csstranslator_type": "xml",
         "_tostring_method": "xml",
     },
 }
@@ -293,6 +299,54 @@ class SelectorList(list[_SelectorType]):
 
 
 _NOT_SET = object()
+_CSS2XPathCacheKey: TypeAlias = tuple[CSSTranslatorType, str, str, int]
+
+
+def _css2xpath_cache(
+    func: typing.Callable[[GenericTranslator | HTMLTranslator, str, str], str],
+) -> typing.Callable[[CSSTranslatorType, str, str], str]:
+    cache: dict[_CSS2XPathCacheKey, str] = {}
+    lock = RLock()
+
+    def wrapper(
+        type_: CSSTranslatorType,
+        query: str,
+        prefix: str = "descendant-or-self::",
+    ) -> str:
+        snapshot = get_css_translator_snapshot()
+        key = (type_, query, prefix, snapshot.generation)
+        with lock:
+            result = cache.get(key, _NOT_SET)
+        if result is not _NOT_SET:
+            return typing.cast("str", result)
+
+        translated = func(snapshot.translator_for(type_), query, prefix)
+
+        with lock:
+            result = cache.get(key, _NOT_SET)
+            if result is _NOT_SET:
+                cache[key] = translated
+                return translated
+        return typing.cast("str", result)
+
+    return wrapper
+
+
+def _translate_css_query(
+    translator: GenericTranslator | HTMLTranslator,
+    query: str,
+    prefix: str = "descendant-or-self::",
+) -> str:
+    return translator.css_to_xpath(query, prefix)
+
+
+@_css2xpath_cache
+def _cached_css2xpath(
+    translator: GenericTranslator | HTMLTranslator,
+    query: str,
+    prefix: str = "descendant-or-self::",
+) -> str:
+    return _translate_css_query(translator, query, prefix)
 
 
 def _get_root_from_text(text: str, *, type_: str, **lxml_kwargs: Any) -> etree._Element:
@@ -642,7 +696,7 @@ class Selector:
 
     def _css2xpath(self, query: str) -> str:
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        return _cached_css2xpath(_ctgroup[type_]["_csstranslator_type"], query)
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """

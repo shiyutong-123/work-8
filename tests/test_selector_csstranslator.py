@@ -4,17 +4,25 @@ Selector tests for cssselect backend
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, cast
 
 import cssselect
 import pytest
+import parsel.selector as selector_module
 from cssselect.parser import SelectorSyntaxError
 from cssselect.xpath import ExpressionError
 from packaging.version import Version
 
 from parsel import Selector, css2xpath
-from parsel.csstranslator import GenericTranslator, HTMLTranslator, TranslatorProtocol
+from parsel.csstranslator import (
+    CSSTranslatorSnapshot,
+    GenericTranslator,
+    HTMLTranslator,
+    TranslatorProtocol,
+)
 
 HTMLBODY = """
 <html>
@@ -167,6 +175,70 @@ def test_css2xpath() -> None:
         "concat(' ', normalize-space(@class), ' '), ' some-class ')]"
     )
     assert css2xpath(".some-class") == expected_xpath
+
+
+def test_selector_css_cache_invalidation_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def run() -> None:
+        query = "DIV"
+        polluted_xpath = GenericTranslator().css_to_xpath(query)
+        expected_xpath = HTMLTranslator().css_to_xpath(query)
+        assert polluted_xpath != expected_xpath
+
+        state = {
+            "snapshot": CSSTranslatorSnapshot(
+                generation=0,
+                html=cast(HTMLTranslator, GenericTranslator()),
+                xml=GenericTranslator(),
+            )
+        }
+
+        def get_snapshot() -> CSSTranslatorSnapshot:
+            return state["snapshot"]
+
+        monkeypatch.setattr(selector_module, "get_css_translator_snapshot", get_snapshot)
+
+        started = threading.Event()
+        resume = threading.Event()
+        original_translate = selector_module._translate_css_query
+        paused = {"value": False}
+
+        def delayed_translate(
+            translator: GenericTranslator | HTMLTranslator,
+            css: str,
+            prefix: str = "descendant-or-self::",
+        ) -> str:
+            if css == query and not paused["value"]:
+                paused["value"] = True
+                started.set()
+                if not resume.wait(timeout=2):
+                    raise AssertionError("translation resume timed out")
+            return original_translate(translator, css, prefix)
+
+        monkeypatch.setattr(selector_module, "_translate_css_query", delayed_translate)
+
+        selector = Selector(text="<DIV>value</DIV>", type="html")
+        first_task = asyncio.create_task(asyncio.to_thread(selector._css2xpath, query))
+
+        assert await asyncio.to_thread(started.wait, 2)
+
+        state["snapshot"] = CSSTranslatorSnapshot(
+            generation=1,
+            html=HTMLTranslator(),
+            xml=GenericTranslator(),
+        )
+        second_result = await asyncio.to_thread(selector._css2xpath, query)
+
+        resume.set()
+        first_result = await first_task
+        third_result = await asyncio.to_thread(selector._css2xpath, query)
+
+        assert first_result == polluted_xpath
+        assert second_result == expected_xpath
+        assert third_result == expected_xpath
+
+    asyncio.run(run())
 
 
 class TestCSSSelector:

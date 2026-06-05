@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Protocol
+from threading import RLock
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
 from cssselect import HTMLTranslator as OriginalHTMLTranslator
@@ -10,7 +12,6 @@ from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
 if TYPE_CHECKING:
-    # typing.Self requires Python 3.11
     from typing_extensions import Self
 
 
@@ -65,7 +66,6 @@ class XPathExpr(OriginalXPathExpr):
         return self
 
 
-# e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
 class TranslatorProtocol(Protocol):
     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
         pass
@@ -81,7 +81,6 @@ class TranslatorMixin:
     """
 
     def xpath_element(self: TranslatorProtocol, selector: Element) -> XPathExpr:
-        # https://github.com/python/mypy/issues/14757
         xpath = super().xpath_element(selector)  # type: ignore[safe-super]
         return XPathExpr.from_xpath(xpath)
 
@@ -138,9 +137,53 @@ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
         return super().css_to_xpath(css, prefix)
 
 
-_translator = HTMLTranslator()
+CSSTranslatorType = Literal["html", "xml"]
+
+
+@dataclass(frozen=True)
+class CSSTranslatorSnapshot:
+    generation: int
+    html: HTMLTranslator
+    xml: GenericTranslator
+
+    def translator_for(
+        self, type_: CSSTranslatorType
+    ) -> GenericTranslator | HTMLTranslator:
+        return self.html if type_ == "html" else self.xml
+
+
+class CSSTranslatorState:
+    def __init__(self) -> None:
+        self._lock = RLock()
+        self._snapshot = self._make_snapshot(0)
+
+    def _make_snapshot(self, generation: int) -> CSSTranslatorSnapshot:
+        return CSSTranslatorSnapshot(
+            generation=generation,
+            html=HTMLTranslator(),
+            xml=GenericTranslator(),
+        )
+
+    def snapshot(self) -> CSSTranslatorSnapshot:
+        return self._snapshot
+
+    def invalidate(self) -> CSSTranslatorSnapshot:
+        with self._lock:
+            self._snapshot = self._make_snapshot(self._snapshot.generation + 1)
+            return self._snapshot
+
+
+_translator_state = CSSTranslatorState()
+
+
+def get_css_translator_snapshot() -> CSSTranslatorSnapshot:
+    return _translator_state.snapshot()
+
+
+def invalidate_css_translator_cache() -> CSSTranslatorSnapshot:
+    return _translator_state.invalidate()
 
 
 def css2xpath(query: str) -> str:
     """Return translated XPath version of a given CSS query"""
-    return _translator.css_to_xpath(query)
+    return get_css_translator_snapshot().html.css_to_xpath(query)

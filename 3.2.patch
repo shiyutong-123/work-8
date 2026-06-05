@@ -1,21 +1,337 @@
-diff --git a/parsel/selector.py b/parsel/selector.py
-index 907c118..62eea23 100644
---- a/parsel/selector.py
-+++ b/parsel/selector.py
-@@ -23,6 +23,7 @@ from packaging.version import Version
+diff --git a/3.2.patch b/3.2.patch
+index 092c4e6..e69de29 100644
+--- a/3.2.patch
++++ b/3.2.patch
+@@ -1,21 +0,0 @@
+-diff --git a/parsel/selector.py b/parsel/selector.py
+-index 907c118..62eea23 100644
+---- a/parsel/selector.py
+-+++ b/parsel/selector.py
+-@@ -23,6 +23,7 @@ from packaging.version import Version
+- 
+- from .csstranslator import GenericTranslator, HTMLTranslator
+- from .utils import extract_regex, flatten, iflatten, shorten
+-+from .xml import _force_fix
+- 
+- if TYPE_CHECKING:
+-     from collections.abc import Mapping
+-@@ -491,6 +492,8 @@ class Selector:
+-         self.namespaces = dict(self._default_namespaces)
+-         if namespaces is not None:
+-             self.namespaces.update(namespaces)
+-+        if self.type == "xml":
+-+            self.root, self.namespaces = _force_fix(self.root, self.namespaces)
+- 
+-         self._expr = _expr
+-         self._huge_tree = huge_tree
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..d0a6528 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,7 +1,9 @@
+ from __future__ import annotations
  
- from .csstranslator import GenericTranslator, HTMLTranslator
- from .utils import extract_regex, flatten, iflatten, shorten
-+from .xml import _force_fix
++from dataclasses import dataclass
+ from functools import lru_cache
+-from typing import TYPE_CHECKING, Any, Protocol
++from threading import RLock
++from typing import TYPE_CHECKING, Any, Literal, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+ from cssselect import HTMLTranslator as OriginalHTMLTranslator
+@@ -10,7 +12,6 @@ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
  
  if TYPE_CHECKING:
-     from collections.abc import Mapping
-@@ -491,6 +492,8 @@ class Selector:
-         self.namespaces = dict(self._default_namespaces)
-         if namespaces is not None:
-             self.namespaces.update(namespaces)
-+        if self.type == "xml":
-+            self.root, self.namespaces = _force_fix(self.root, self.namespaces)
+-    # typing.Self requires Python 3.11
+     from typing_extensions import Self
  
-         self._expr = _expr
-         self._huge_tree = huge_tree
+ 
+@@ -65,7 +66,6 @@ class XPathExpr(OriginalXPathExpr):
+         return self
+ 
+ 
+-# e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
+ class TranslatorProtocol(Protocol):
+     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
+         pass
+@@ -81,7 +81,6 @@ class TranslatorMixin:
+     """
+ 
+     def xpath_element(self: TranslatorProtocol, selector: Element) -> XPathExpr:
+-        # https://github.com/python/mypy/issues/14757
+         xpath = super().xpath_element(selector)  # type: ignore[safe-super]
+         return XPathExpr.from_xpath(xpath)
+ 
+@@ -138,9 +137,53 @@ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+         return super().css_to_xpath(css, prefix)
+ 
+ 
+-_translator = HTMLTranslator()
++CSSTranslatorType = Literal["html", "xml"]
++
++
++@dataclass(frozen=True)
++class CSSTranslatorSnapshot:
++    generation: int
++    html: HTMLTranslator
++    xml: GenericTranslator
++
++    def translator_for(
++        self, type_: CSSTranslatorType
++    ) -> GenericTranslator | HTMLTranslator:
++        return self.html if type_ == "html" else self.xml
++
++
++class CSSTranslatorState:
++    def __init__(self) -> None:
++        self._lock = RLock()
++        self._snapshot = self._make_snapshot(0)
++
++    def _make_snapshot(self, generation: int) -> CSSTranslatorSnapshot:
++        return CSSTranslatorSnapshot(
++            generation=generation,
++            html=HTMLTranslator(),
++            xml=GenericTranslator(),
++        )
++
++    def snapshot(self) -> CSSTranslatorSnapshot:
++        return self._snapshot
++
++    def invalidate(self) -> CSSTranslatorSnapshot:
++        with self._lock:
++            self._snapshot = self._make_snapshot(self._snapshot.generation + 1)
++            return self._snapshot
++
++
++_translator_state = CSSTranslatorState()
++
++
++def get_css_translator_snapshot() -> CSSTranslatorSnapshot:
++    return _translator_state.snapshot()
++
++
++def invalidate_css_translator_cache() -> CSSTranslatorSnapshot:
++    return _translator_state.invalidate()
+ 
+ 
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+-    return _translator.css_to_xpath(query)
++    return get_css_translator_snapshot().html.css_to_xpath(query)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 62eea23..8b706c6 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -7,6 +7,7 @@ import json
+ import typing
+ import warnings
+ from io import BytesIO
++from threading import RLock
+ from typing import (
+     TYPE_CHECKING,
+     Any,
+@@ -21,7 +22,12 @@ import jmespath
+ from lxml import etree, html
+ from packaging.version import Version
+ 
+-from .csstranslator import GenericTranslator, HTMLTranslator
++from .csstranslator import (
++    CSSTranslatorType,
++    GenericTranslator,
++    HTMLTranslator,
++    get_css_translator_snapshot,
++)
+ from .utils import extract_regex, flatten, iflatten, shorten
+ from .xml import _force_fix
+ 
+@@ -66,19 +72,19 @@ class SafeXMLParser(etree.XMLParser):
+ 
+ class CTGroupValue(TypedDict):
+     _parser: type[etree.XMLParser | html.HTMLParser]
+-    _csstranslator: GenericTranslator | HTMLTranslator
++    _csstranslator_type: CSSTranslatorType
+     _tostring_method: _TostringMethodType
+ 
+ 
+ _ctgroup: dict[str, CTGroupValue] = {
+     "html": {
+         "_parser": html.HTMLParser,
+-        "_csstranslator": HTMLTranslator(),
++        "_csstranslator_type": "html",
+         "_tostring_method": "html",
+     },
+     "xml": {
+         "_parser": SafeXMLParser,
+-        "_csstranslator": GenericTranslator(),
++        "_csstranslator_type": "xml",
+         "_tostring_method": "xml",
+     },
+ }
+@@ -293,6 +299,54 @@ class SelectorList(list[_SelectorType]):
+ 
+ 
+ _NOT_SET = object()
++_CSS2XPathCacheKey: TypeAlias = tuple[CSSTranslatorType, str, str, int]
++
++
++def _css2xpath_cache(
++    func: typing.Callable[[GenericTranslator | HTMLTranslator, str, str], str],
++) -> typing.Callable[[CSSTranslatorType, str, str], str]:
++    cache: dict[_CSS2XPathCacheKey, str] = {}
++    lock = RLock()
++
++    def wrapper(
++        type_: CSSTranslatorType,
++        query: str,
++        prefix: str = "descendant-or-self::",
++    ) -> str:
++        snapshot = get_css_translator_snapshot()
++        key = (type_, query, prefix, snapshot.generation)
++        with lock:
++            result = cache.get(key, _NOT_SET)
++        if result is not _NOT_SET:
++            return typing.cast("str", result)
++
++        translated = func(snapshot.translator_for(type_), query, prefix)
++
++        with lock:
++            result = cache.get(key, _NOT_SET)
++            if result is _NOT_SET:
++                cache[key] = translated
++                return translated
++        return typing.cast("str", result)
++
++    return wrapper
++
++
++def _translate_css_query(
++    translator: GenericTranslator | HTMLTranslator,
++    query: str,
++    prefix: str = "descendant-or-self::",
++) -> str:
++    return translator.css_to_xpath(query, prefix)
++
++
++@_css2xpath_cache
++def _cached_css2xpath(
++    translator: GenericTranslator | HTMLTranslator,
++    query: str,
++    prefix: str = "descendant-or-self::",
++) -> str:
++    return _translate_css_query(translator, query, prefix)
+ 
+ 
+ def _get_root_from_text(text: str, *, type_: str, **lxml_kwargs: Any) -> etree._Element:
+@@ -642,7 +696,7 @@ class Selector:
+ 
+     def _css2xpath(self, query: str) -> str:
+         type_ = _xml_or_html(self.type)
+-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
++        return _cached_css2xpath(_ctgroup[type_]["_csstranslator_type"], query)
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+         """
+diff --git a/tests/test_selector_csstranslator.py b/tests/test_selector_csstranslator.py
+index 597fc08..f76b610 100644
+--- a/tests/test_selector_csstranslator.py
++++ b/tests/test_selector_csstranslator.py
+@@ -4,17 +4,25 @@ Selector tests for cssselect backend
+ 
+ from __future__ import annotations
+ 
++import asyncio
++import threading
+ from abc import ABC, abstractmethod
+-from typing import Any
++from typing import Any, cast
+ 
+ import cssselect
+ import pytest
++import parsel.selector as selector_module
+ from cssselect.parser import SelectorSyntaxError
+ from cssselect.xpath import ExpressionError
+ from packaging.version import Version
+ 
+ from parsel import Selector, css2xpath
+-from parsel.csstranslator import GenericTranslator, HTMLTranslator, TranslatorProtocol
++from parsel.csstranslator import (
++    CSSTranslatorSnapshot,
++    GenericTranslator,
++    HTMLTranslator,
++    TranslatorProtocol,
++)
+ 
+ HTMLBODY = """
+ <html>
+@@ -169,6 +177,70 @@ def test_css2xpath() -> None:
+     assert css2xpath(".some-class") == expected_xpath
+ 
+ 
++def test_selector_css_cache_invalidation_race(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    async def run() -> None:
++        query = "DIV"
++        polluted_xpath = GenericTranslator().css_to_xpath(query)
++        expected_xpath = HTMLTranslator().css_to_xpath(query)
++        assert polluted_xpath != expected_xpath
++
++        state = {
++            "snapshot": CSSTranslatorSnapshot(
++                generation=0,
++                html=cast(HTMLTranslator, GenericTranslator()),
++                xml=GenericTranslator(),
++            )
++        }
++
++        def get_snapshot() -> CSSTranslatorSnapshot:
++            return state["snapshot"]
++
++        monkeypatch.setattr(selector_module, "get_css_translator_snapshot", get_snapshot)
++
++        started = threading.Event()
++        resume = threading.Event()
++        original_translate = selector_module._translate_css_query
++        paused = {"value": False}
++
++        def delayed_translate(
++            translator: GenericTranslator | HTMLTranslator,
++            css: str,
++            prefix: str = "descendant-or-self::",
++        ) -> str:
++            if css == query and not paused["value"]:
++                paused["value"] = True
++                started.set()
++                if not resume.wait(timeout=2):
++                    raise AssertionError("translation resume timed out")
++            return original_translate(translator, css, prefix)
++
++        monkeypatch.setattr(selector_module, "_translate_css_query", delayed_translate)
++
++        selector = Selector(text="<DIV>value</DIV>", type="html")
++        first_task = asyncio.create_task(asyncio.to_thread(selector._css2xpath, query))
++
++        assert await asyncio.to_thread(started.wait, 2)
++
++        state["snapshot"] = CSSTranslatorSnapshot(
++            generation=1,
++            html=HTMLTranslator(),
++            xml=GenericTranslator(),
++        )
++        second_result = await asyncio.to_thread(selector._css2xpath, query)
++
++        resume.set()
++        first_result = await first_task
++        third_result = await asyncio.to_thread(selector._css2xpath, query)
++
++        assert first_result == polluted_xpath
++        assert second_result == expected_xpath
++        assert third_result == expected_xpath
++
++    asyncio.run(run())
++
++
+ class TestCSSSelector:
+     sel = Selector(text=HTMLBODY)
+ 
