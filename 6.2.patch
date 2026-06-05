@@ -1,0 +1,65 @@
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..c0359c9 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -87,6 +87,11 @@ def _xml_or_html(type_: str | None) -> str:
+     return "xml" if type_ == "xml" else "html"
+ 
+ 
++def _is_namespace_overflow_error(exc: Exception) -> bool:
++    message = str(exc).lower()
++    return "namespace" in message and "overflow" in message
++
++
+ def create_root_node(
+     text: str,
+     parser_cls: type[_ParserType],
+@@ -635,7 +640,47 @@ class Selector:
+         """
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
+-        return self.xpath(self._css2xpath(query))
++        xpath_query = self._css2xpath(query)
++        try:
++            return self.xpath(xpath_query)
++        except ValueError as exc:
++            if self.type != "html" or not _is_namespace_overflow_error(exc):
++                raise
++            fallback = self._css_namespace_overflow_fallback(xpath_query)
++            if fallback is None:
++                raise exc
++            return fallback
++
++    def _css_namespace_overflow_fallback(
++        self, xpath_query: str
++    ) -> SelectorList[Self] | None:
++        try:
++            if self._text is not None:
++                fallback_root = self._get_root(
++                    self._text,
++                    type_="html",
++                    huge_tree=self._huge_tree,
++                )
++            else:
++                fallback_root = self._get_root(
++                    etree.tostring(
++                        self.root,
++                        method="html",
++                        encoding="unicode",
++                        with_tail=False,
++                    ),
++                    type_="html",
++                    huge_tree=self._huge_tree,
++                )
++        except (AttributeError, TypeError, ValueError):
++            return None
++        fallback_selector = self.__class__(
++            root=fallback_root,
++            type="html",
++            namespaces=self.namespaces,
++            huge_tree=self._huge_tree,
++        )
++        return fallback_selector.xpath(xpath_query)
+ 
+     def _css2xpath(self, query: str) -> str:
+         type_ = _xml_or_html(self.type)
