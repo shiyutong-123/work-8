@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import threading
+from functools import lru_cache, wraps
 from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
@@ -126,21 +127,55 @@ class TranslatorMixin:
         return XPathExpr.from_xpath(xpath, textnode=True)
 
 
+def _threadsafe_lru_cache(maxsize: int = 256):
+    """Thread-safe LRU cache decorator.
+
+    Wraps functools.lru_cache with a per-decorator RLock so that
+    concurrent cache reads, writes, and invalidations (cache_clear)
+    are serialised.  This prevents the race condition where two
+    threads simultaneously miss the same key, both compute the value,
+    and then corrupt the internal OrderedDict linked list of
+    lru_cache — which can cause a cached value for one key to be
+    returned for a different key (type pollution).
+    """
+
+    def decorator(func: Any) -> Any:
+        _lock = threading.RLock()
+        _cached = lru_cache(maxsize=maxsize)(func)
+
+        @wraps(func)
+        def wrapper(*args: Any, **kwargs: Any) -> Any:
+            with _lock:
+                return _cached(*args, **kwargs)
+
+        def _cache_clear() -> None:
+            with _lock:
+                _cached.cache_clear()
+
+        wrapper.cache_clear = _cache_clear  # type: ignore[attr-defined]
+        wrapper.cache_info = _cached.cache_info  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorator
+
+
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
-    @lru_cache(maxsize=256)
+    @_threadsafe_lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
-    @lru_cache(maxsize=256)
+    @_threadsafe_lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
+_translator_lock = threading.RLock()
 _translator = HTMLTranslator()
 
 
 def css2xpath(query: str) -> str:
     """Return translated XPath version of a given CSS query"""
-    return _translator.css_to_xpath(query)
+    with _translator_lock:
+        return _translator.css_to_xpath(query)

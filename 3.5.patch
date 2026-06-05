@@ -1,0 +1,148 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..57d856f 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+-from functools import lru_cache
++import threading
++from functools import lru_cache, wraps
+ from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+@@ -126,21 +127,55 @@ class TranslatorMixin:
+         return XPathExpr.from_xpath(xpath, textnode=True)
+ 
+ 
++def _threadsafe_lru_cache(maxsize: int = 256):
++    """Thread-safe LRU cache decorator.
++
++    Wraps functools.lru_cache with a per-decorator RLock so that
++    concurrent cache reads, writes, and invalidations (cache_clear)
++    are serialised.  This prevents the race condition where two
++    threads simultaneously miss the same key, both compute the value,
++    and then corrupt the internal OrderedDict linked list of
++    lru_cache — which can cause a cached value for one key to be
++    returned for a different key (type pollution).
++    """
++
++    def decorator(func: Any) -> Any:
++        _lock = threading.RLock()
++        _cached = lru_cache(maxsize=maxsize)(func)
++
++        @wraps(func)
++        def wrapper(*args: Any, **kwargs: Any) -> Any:
++            with _lock:
++                return _cached(*args, **kwargs)
++
++        def _cache_clear() -> None:
++            with _lock:
++                _cached.cache_clear()
++
++        wrapper.cache_clear = _cache_clear  # type: ignore[attr-defined]
++        wrapper.cache_info = _cached.cache_info  # type: ignore[attr-defined]
++        return wrapper
++
++    return decorator
++
++
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+-    @lru_cache(maxsize=256)
++    @_threadsafe_lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+-    @lru_cache(maxsize=256)
++    @_threadsafe_lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+ 
+ 
++_translator_lock = threading.RLock()
+ _translator = HTMLTranslator()
+ 
+ 
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+-    return _translator.css_to_xpath(query)
++    with _translator_lock:
++        return _translator.css_to_xpath(query)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..99274ce 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -4,8 +4,10 @@ packages."""
+ from __future__ import annotations
+ 
+ import json
++import threading
+ import typing
+ import warnings
++from functools import wraps
+ from io import BytesIO
+ from typing import (
+     TYPE_CHECKING,
+@@ -82,6 +84,47 @@ _ctgroup: dict[str, CTGroupValue] = {
+     },
+ }
+ 
++_ctgroup_lock = threading.RLock()
++
++
++def _threadsafe_css_cache(maxsize: int = 256):
++    """Thread-safe cache decorator for CSS-to-XPath translations.
++
++    Caches results keyed by (selector_type, css_query) so that
++    repeated translations bypass the shared translator entirely.
++    A per-decorator RLock serialises cache reads, writes, and
++    invalidations, preventing the race condition where concurrent
++    threads corrupt the cache and cause type pollution (e.g. an
++    HTML selector receiving an XML-style XPath).
++    """
++
++    def decorator(func: Any) -> Any:
++        _cache: dict[tuple[str, str], str] = {}
++        _lock = threading.RLock()
++
++        @wraps(func)
++        def wrapper(self: Selector, query: str) -> str:
++            type_ = _xml_or_html(self.type)
++            cache_key = (type_, query)
++            with _lock:
++                if cache_key in _cache:
++                    return _cache[cache_key]
++            result = func(self, query)
++            with _lock:
++                if len(_cache) >= maxsize:
++                    _cache.pop(next(iter(_cache)))
++                _cache[cache_key] = result
++            return result
++
++        def _cache_clear() -> None:
++            with _lock:
++                _cache.clear()
++
++        wrapper.cache_clear = _cache_clear  # type: ignore[attr-defined]
++        return wrapper
++
++    return decorator
++
+ 
+ def _xml_or_html(type_: str | None) -> str:
+     return "xml" if type_ == "xml" else "html"
+@@ -637,9 +680,11 @@ class Selector:
+             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
+         return self.xpath(self._css2xpath(query))
+ 
++    @_threadsafe_css_cache(maxsize=256)
+     def _css2xpath(self, query: str) -> str:
+         type_ = _xml_or_html(self.type)
+-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
++        with _ctgroup_lock:
++            return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+         """

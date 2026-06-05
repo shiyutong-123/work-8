@@ -4,8 +4,10 @@ packages."""
 from __future__ import annotations
 
 import json
+import threading
 import typing
 import warnings
+from functools import wraps
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
@@ -81,6 +83,47 @@ _ctgroup: dict[str, CTGroupValue] = {
         "_tostring_method": "xml",
     },
 }
+
+_ctgroup_lock = threading.RLock()
+
+
+def _threadsafe_css_cache(maxsize: int = 256):
+    """Thread-safe cache decorator for CSS-to-XPath translations.
+
+    Caches results keyed by (selector_type, css_query) so that
+    repeated translations bypass the shared translator entirely.
+    A per-decorator RLock serialises cache reads, writes, and
+    invalidations, preventing the race condition where concurrent
+    threads corrupt the cache and cause type pollution (e.g. an
+    HTML selector receiving an XML-style XPath).
+    """
+
+    def decorator(func: Any) -> Any:
+        _cache: dict[tuple[str, str], str] = {}
+        _lock = threading.RLock()
+
+        @wraps(func)
+        def wrapper(self: Selector, query: str) -> str:
+            type_ = _xml_or_html(self.type)
+            cache_key = (type_, query)
+            with _lock:
+                if cache_key in _cache:
+                    return _cache[cache_key]
+            result = func(self, query)
+            with _lock:
+                if len(_cache) >= maxsize:
+                    _cache.pop(next(iter(_cache)))
+                _cache[cache_key] = result
+            return result
+
+        def _cache_clear() -> None:
+            with _lock:
+                _cache.clear()
+
+        wrapper.cache_clear = _cache_clear  # type: ignore[attr-defined]
+        return wrapper
+
+    return decorator
 
 
 def _xml_or_html(type_: str | None) -> str:
@@ -637,9 +680,11 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
+    @_threadsafe_css_cache(maxsize=256)
     def _css2xpath(self, query: str) -> str:
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        with _ctgroup_lock:
+            return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """
