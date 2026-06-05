@@ -1,12 +1,77 @@
 from __future__ import annotations
 
 import re
+from itertools import product
 from typing import TYPE_CHECKING, Any, cast
 
 from w3lib.html import replace_entities as w3lib_replace_entities
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable, Iterator
+    from collections.abc import Callable, Iterable, Iterator
+
+
+class MultiDispatch:
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._registry: dict[tuple[type[Any], ...], Callable[..., Any]] = {}
+
+    def register(
+        self, *types: type[Any]
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self._registry[types] = func
+            return func
+
+        return decorator
+
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+        signatures = product(*(type(arg).__mro__ for arg in args))
+        for signature in signatures:
+            handler = self._registry.get(signature)
+            if handler is not None:
+                return handler(*args, **kwargs)
+        raise TypeError(f"No matching implementation for {self.name}")
+
+
+class SelectorTypeToken:
+    value: str | None = None
+
+
+class TreeSelectorTypeToken(SelectorTypeToken):
+    pass
+
+
+class HtmlSelectorTypeToken(TreeSelectorTypeToken):
+    value = "html"
+
+
+class XmlSelectorTypeToken(TreeSelectorTypeToken):
+    value = "xml"
+
+
+class TextSelectorTypeToken(TreeSelectorTypeToken):
+    value = "text"
+
+
+class JsonSelectorTypeToken(SelectorTypeToken):
+    value = "json"
+
+
+class DefaultSelectorTypeToken(SelectorTypeToken):
+    pass
+
+
+_SELECTOR_TYPE_TOKENS = {
+    None: DefaultSelectorTypeToken(),
+    "html": HtmlSelectorTypeToken(),
+    "json": JsonSelectorTypeToken(),
+    "text": TextSelectorTypeToken(),
+    "xml": XmlSelectorTypeToken(),
+}
+
+
+def as_selector_type_token(type_name: str | None) -> SelectorTypeToken:
+    return _SELECTOR_TYPE_TOKENS[type_name]
 
 
 def flatten(x: Iterable[Any]) -> list[Any]:
@@ -62,7 +127,7 @@ def _is_listlike(x: Any) -> bool:
     >>> _is_listlike(range(5))
     True
     """
-    return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
+    return hasattr(x, "__iter__") and x.__class__ not in {str, bytes}
 
 
 def extract_regex(
@@ -73,7 +138,7 @@ def extract_regex(
     * if the regex contains multiple numbered groups, all those will be returned (flattened)
     * if the regex doesn't contain any group the entire regex matching is returned
     """
-    if isinstance(regex, str):
+    if regex.__class__ is str:
         regex = re.compile(regex, re.UNICODE)
 
     if "extract" in regex.groupindex:

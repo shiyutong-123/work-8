@@ -22,7 +22,18 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import (
+    JsonSelectorTypeToken,
+    MultiDispatch,
+    SelectorTypeToken,
+    TextSelectorTypeToken,
+    TreeSelectorTypeToken,
+    as_selector_type_token,
+    extract_regex,
+    flatten,
+    iflatten,
+    shorten,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -137,7 +148,7 @@ class SelectorList(list[_SelectorType]):
         self, pos: SupportsIndex | slice
     ) -> _SelectorType | SelectorList[_SelectorType]:
         o = super().__getitem__(pos)
-        if isinstance(pos, slice):
+        if pos.__class__ is slice:
             return self.__class__(typing.cast("SelectorList[_SelectorType]", o))
         return typing.cast("_SelectorType", o)
 
@@ -347,17 +358,64 @@ def _get_root_and_type_from_text(
     return root, type_
 
 
+_root_type_dispatch = MultiDispatch("root_type")
+
+
+@_root_type_dispatch.register(etree._Element, JsonSelectorTypeToken)
+def _root_type_for_json_element(root: Any, type_token: JsonSelectorTypeToken) -> str:
+    raise ValueError(
+        f"Selector got an lxml.etree._Element object as root, "
+        f"and {type_token.value!r} as type."
+    )
+
+
+@_root_type_dispatch.register(etree._Element, TextSelectorTypeToken)
+def _root_type_for_text_element(root: Any, type_token: TextSelectorTypeToken) -> str:
+    raise ValueError(
+        f"Selector got an lxml.etree._Element object as root, "
+        f"and {type_token.value!r} as type."
+    )
+
+
+@_root_type_dispatch.register(etree._Element, SelectorTypeToken)
+def _root_type_for_element(root: Any, type_token: SelectorTypeToken) -> str:
+    return _xml_or_html(type_token.value)
+
+
+@_root_type_dispatch.register(object, SelectorTypeToken)
+def _root_type_for_anything(root: Any, type_token: SelectorTypeToken) -> str:
+    return type_token.value or "json"
+
+
+_call_dispatch = MultiDispatch("selector_call")
+
+
+@_call_dispatch.register(TreeSelectorTypeToken, str)
+def _resolve_tree_call(type_token: TreeSelectorTypeToken, query: str) -> Any:
+    return _call_tree_selector
+
+
+@_call_dispatch.register(JsonSelectorTypeToken, str)
+def _resolve_json_call(type_token: JsonSelectorTypeToken, query: str) -> Any:
+    return _call_json_selector
+
+
+def _call_tree_selector(selector: Selector, query: str, **kwargs: Any) -> Any:
+    root = selector.root
+    if selector.type == "text":
+        root = selector._get_root(selector._text or "", type_="html")
+    return root(query, **kwargs)
+
+
+def _call_json_selector(selector: Selector, query: str, **kwargs: Any) -> Any:
+    data = selector.root
+    if type(data) is str:
+        data = _load_json_or_none(data)
+    return jmespath.search(query, data, **kwargs)
+
+
 def _get_root_type(root: Any, *, input_type: str | None) -> str:
-    if isinstance(root, etree._Element):
-        if input_type in {"json", "text"}:
-            raise ValueError(
-                f"Selector got an lxml.etree._Element object as root, "
-                f"and {input_type!r} as type."
-            )
-        return _xml_or_html(input_type)
-    if isinstance(root, (dict, list)) or _is_valid_json(root):
-        return "json"
-    return input_type or "json"
+    return typing.cast(str, _root_type_dispatch(root, as_selector_type_token(input_type)))
 
 
 def _is_valid_json(text: str) -> bool:
@@ -369,7 +427,7 @@ def _is_valid_json(text: str) -> bool:
 
 
 def _load_json_or_none(text: str) -> Any:
-    if isinstance(text, (str, bytes, bytearray)):
+    if text.__class__ in {str, bytes, bytearray}:
         try:
             return json.loads(text)
         except ValueError:
@@ -406,6 +464,7 @@ class Selector:
 
     __slots__ = [
         "__weakref__",
+        "_call_token",
         "_expr",
         "_huge_tree",
         "_text",
@@ -447,7 +506,7 @@ class Selector:
         if text is None and not body and root is _NOT_SET:
             raise ValueError("Selector needs text, body, or root arguments")
 
-        if text is not None and not isinstance(text, str):
+        if text is not None and text.__class__ is not str:
             msg = f"text argument should be of type str, got {text.__class__}"
             raise TypeError(msg)
 
@@ -457,9 +516,6 @@ class Selector:
                     "Selector got both text and root, root is being ignored.",
                     stacklevel=2,
                 )
-            if not isinstance(text, str):
-                msg = f"text argument should be of type str, got {text.__class__}"
-                raise TypeError(msg)
 
             root, type = _get_root_and_type_from_text(  # noqa: A001
                 text,
@@ -470,7 +526,7 @@ class Selector:
             self.root = root
             self.type = type
         elif body:
-            if not isinstance(body, (bytes, bytearray)):
+            if body.__class__ not in {bytes, bytearray}:
                 msg = f"body argument should be of type bytes or bytearray, got {body.__class__}"
                 raise TypeError(msg)
             root, type = _get_root_and_type_from_bytes(  # noqa: A001
@@ -492,12 +548,21 @@ class Selector:
         if namespaces is not None:
             self.namespaces.update(namespaces)
 
+        self._call_token = as_selector_type_token(self.type)
         self._expr = _expr
         self._huge_tree = huge_tree
-        self._text = text
+        self._text = (
+            self.root
+            if self.type == "text" and self.root.__class__ is str
+            else text
+        )
 
     def __getstate__(self) -> Any:
         raise TypeError("can't pickle Selector objects")
+
+    def __call__(self, query: str, **kwargs: Any) -> Any:
+        handler = _call_dispatch(self._call_token, query)
+        return handler(self, query, **kwargs)
 
     def _get_root(
         self,
@@ -536,8 +601,7 @@ class Selector:
             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
         if self.type == "json":
-            if isinstance(self.root, str):
-                # Selector received a JSON string as root.
+            if self.root.__class__ is str:
                 data = _load_json_or_none(self.root)
             else:
                 data = self.root
@@ -548,11 +612,11 @@ class Selector:
         result = jmespath.search(query, data, **kwargs)
         if result is None:
             result = []
-        elif not isinstance(result, list):
+        elif result.__class__ is not list:
             result = [result]
 
-        def make_selector(x: Any) -> Selector:  # closure function
-            if isinstance(x, str):
+        def make_selector(x: Any) -> Selector:
+            if x.__class__ is str:
                 return self.__class__(text=x, _expr=query, type="text")
             return self.__class__(root=x, _expr=query)
 
@@ -608,7 +672,7 @@ class Selector:
         except etree.XPathError as exc:
             raise ValueError(f"XPath error: {exc} in {query}")
 
-        if not isinstance(result, list):
+        if result.__class__ is not list:
             result = [result]
 
         result = [
