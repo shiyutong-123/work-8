@@ -23,6 +23,7 @@ from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
 from .utils import extract_regex, flatten, iflatten, shorten
+from .xml import _force_fix
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -487,6 +488,10 @@ class Selector:
         else:
             self.root = root
             self.type = _get_root_type(root, input_type=type)
+
+        # Force fix namespace bug
+        if self.type in ("html", "xml") and isinstance(self.root, etree._Element):
+            self.root = _force_fix(self.root)
 
         self.namespaces = dict(self._default_namespaces)
         if namespaces is not None:
