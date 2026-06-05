@@ -36,8 +36,11 @@ class TestSelector:
 
     def test_pickle_selector(self) -> None:
         sel = self.sscls(text="<html><body><p>some text</p></body></html>")
-        with pytest.raises(TypeError):
-            pickle.dumps(sel, protocol=2)
+        data = pickle.dumps(sel, protocol=2)
+        loaded = pickle.loads(data)
+        assert loaded.type == sel.type
+        assert loaded.get() == sel.get()
+        assert loaded.css("p::text").get() == "some text"
 
     def test_pickle_selector_list(self) -> None:
         sel = self.sscls(

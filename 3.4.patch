@@ -1,0 +1,205 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..253ae21 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+-from functools import lru_cache
++import threading
++from collections import OrderedDict
+ from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+@@ -74,6 +75,42 @@ class TranslatorProtocol(Protocol):
+         pass
+ 
+ 
++class _CSSTranslationCache:
++    """Thread-safe LRU cache for CSS-to-XPath translations.
++
++    Keys are ``(translator_type, css, prefix)`` tuples to prevent
++    type pollution between different translator types in concurrent
++    scenarios.
++    """
++
++    def __init__(self, maxsize: int = 256) -> None:
++        self._cache: OrderedDict[tuple[str, str, str], str] = OrderedDict()
++        self._maxsize = maxsize
++        self._lock = threading.RLock()
++
++    def get(self, key: tuple[str, str, str]) -> str | None:
++        with self._lock:
++            if key in self._cache:
++                self._cache.move_to_end(key)
++                return self._cache[key]
++            return None
++
++    def set(self, key: tuple[str, str, str], value: str) -> None:
++        with self._lock:
++            if key in self._cache:
++                self._cache.move_to_end(key)
++            self._cache[key] = value
++            if len(self._cache) > self._maxsize:
++                self._cache.popitem(last=False)
++
++    def clear(self) -> None:
++        with self._lock:
++            self._cache.clear()
++
++
++_translation_cache = _CSSTranslationCache()
++
++
+ class TranslatorMixin:
+     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
+ 
+@@ -127,15 +164,23 @@ class TranslatorMixin:
+ 
+ 
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+-    @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        key = ("generic", css, prefix)
++        result = _translation_cache.get(key)
++        if result is None:
++            result = super().css_to_xpath(css, prefix)
++            _translation_cache.set(key, result)
++        return result
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+-    @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        key = ("html", css, prefix)
++        result = _translation_cache.get(key)
++        if result is None:
++            result = super().css_to_xpath(css, prefix)
++            _translation_cache.set(key, result)
++        return result
+ 
+ 
+ _translator = HTMLTranslator()
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..33ca3e7 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -4,8 +4,10 @@ packages."""
+ from __future__ import annotations
+ 
+ import json
++import threading
+ import typing
+ import warnings
++from copy import deepcopy
+ from io import BytesIO
+ from typing import (
+     TYPE_CHECKING,
+@@ -83,6 +85,36 @@ _ctgroup: dict[str, CTGroupValue] = {
+ }
+ 
+ 
++def _cached_css2xpath(func: typing.Callable[[Selector, str], str]) -> typing.Callable[[Selector, str], str]:
++    """Decorator that caches CSS-to-XPath translations with type awareness.
++
++    The cache key includes the Selector's type to prevent type pollution
++    in concurrent scenarios where Selectors of different types share
++    the same translator backend.
++    """
++    _cache: dict[tuple[str, str], str] = {}
++    _lock = threading.RLock()
++
++    def wrapper(self: Selector, query: str) -> str:
++        type_ = _xml_or_html(self.type)
++        cache_key = (type_, query)
++        with _lock:
++            cached = _cache.get(cache_key)
++        if cached is not None:
++            return cached
++        result = func(self, query)
++        with _lock:
++            _cache[cache_key] = result
++        return result
++
++    def cache_clear() -> None:
++        with _lock:
++            _cache.clear()
++
++    wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
++    return wrapper
++
++
+ def _xml_or_html(type_: str | None) -> str:
+     return "xml" if type_ == "xml" else "html"
+ 
+@@ -497,7 +529,41 @@ class Selector:
+         self._text = text
+ 
+     def __getstate__(self) -> Any:
+-        raise TypeError("can't pickle Selector objects")
++        return {
++            "root": self._serialize_root(),
++            "type": self.type,
++            "namespaces": dict(self.namespaces),
++            "_expr": self._expr,
++            "_huge_tree": self._huge_tree,
++            "_text": self._text,
++        }
++
++    def __setstate__(self, state: dict[str, Any]) -> None:
++        self.type = state["type"]
++        self._expr = state["_expr"]
++        self._huge_tree = state["_huge_tree"]
++        self._text = state["_text"]
++        self.namespaces = dict(state["namespaces"])
++        self.root = self._deserialize_root(state["root"])
++
++    def _serialize_root(self) -> Any:
++        if self.type in ("html", "xml"):
++            return etree.tostring(
++                self.root,
++                method=_ctgroup[self.type]["_tostring_method"],
++                encoding="unicode",
++            )
++        return deepcopy(self.root)
++
++    def _deserialize_root(self, root_data: Any) -> Any:
++        if self.type in ("html", "xml"):
++            text = root_data if isinstance(root_data, str) else ""
++            return create_root_node(
++                text=text,
++                parser_cls=_ctgroup[self.type]["_parser"],
++                huge_tree=self._huge_tree,
++            )
++        return root_data
+ 
+     def _get_root(
+         self,
+@@ -637,6 +703,7 @@ class Selector:
+             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
+         return self.xpath(self._css2xpath(query))
+ 
++    @_cached_css2xpath
+     def _css2xpath(self, query: str) -> str:
+         type_ = _xml_or_html(self.type)
+         return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+diff --git a/tests/test_selector.py b/tests/test_selector.py
+index 5d5b98e..61bd21a 100644
+--- a/tests/test_selector.py
++++ b/tests/test_selector.py
+@@ -36,8 +36,11 @@ class TestSelector:
+ 
+     def test_pickle_selector(self) -> None:
+         sel = self.sscls(text="<html><body><p>some text</p></body></html>")
+-        with pytest.raises(TypeError):
+-            pickle.dumps(sel, protocol=2)
++        data = pickle.dumps(sel, protocol=2)
++        loaded = pickle.loads(data)
++        assert loaded.type == sel.type
++        assert loaded.get() == sel.get()
++        assert loaded.css("p::text").get() == "some text"
+ 
+     def test_pickle_selector_list(self) -> None:
+         sel = self.sscls(

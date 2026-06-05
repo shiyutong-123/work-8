@@ -4,8 +4,10 @@ packages."""
 from __future__ import annotations
 
 import json
+import threading
 import typing
 import warnings
+from copy import deepcopy
 from io import BytesIO
 from typing import (
     TYPE_CHECKING,
@@ -81,6 +83,36 @@ _ctgroup: dict[str, CTGroupValue] = {
         "_tostring_method": "xml",
     },
 }
+
+
+def _cached_css2xpath(func: typing.Callable[[Selector, str], str]) -> typing.Callable[[Selector, str], str]:
+    """Decorator that caches CSS-to-XPath translations with type awareness.
+
+    The cache key includes the Selector's type to prevent type pollution
+    in concurrent scenarios where Selectors of different types share
+    the same translator backend.
+    """
+    _cache: dict[tuple[str, str], str] = {}
+    _lock = threading.RLock()
+
+    def wrapper(self: Selector, query: str) -> str:
+        type_ = _xml_or_html(self.type)
+        cache_key = (type_, query)
+        with _lock:
+            cached = _cache.get(cache_key)
+        if cached is not None:
+            return cached
+        result = func(self, query)
+        with _lock:
+            _cache[cache_key] = result
+        return result
+
+    def cache_clear() -> None:
+        with _lock:
+            _cache.clear()
+
+    wrapper.cache_clear = cache_clear  # type: ignore[attr-defined]
+    return wrapper
 
 
 def _xml_or_html(type_: str | None) -> str:
@@ -497,7 +529,41 @@ class Selector:
         self._text = text
 
     def __getstate__(self) -> Any:
-        raise TypeError("can't pickle Selector objects")
+        return {
+            "root": self._serialize_root(),
+            "type": self.type,
+            "namespaces": dict(self.namespaces),
+            "_expr": self._expr,
+            "_huge_tree": self._huge_tree,
+            "_text": self._text,
+        }
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.type = state["type"]
+        self._expr = state["_expr"]
+        self._huge_tree = state["_huge_tree"]
+        self._text = state["_text"]
+        self.namespaces = dict(state["namespaces"])
+        self.root = self._deserialize_root(state["root"])
+
+    def _serialize_root(self) -> Any:
+        if self.type in ("html", "xml"):
+            return etree.tostring(
+                self.root,
+                method=_ctgroup[self.type]["_tostring_method"],
+                encoding="unicode",
+            )
+        return deepcopy(self.root)
+
+    def _deserialize_root(self, root_data: Any) -> Any:
+        if self.type in ("html", "xml"):
+            text = root_data if isinstance(root_data, str) else ""
+            return create_root_node(
+                text=text,
+                parser_cls=_ctgroup[self.type]["_parser"],
+                huge_tree=self._huge_tree,
+            )
+        return root_data
 
     def _get_root(
         self,
@@ -637,6 +703,7 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
+    @_cached_css2xpath
     def _css2xpath(self, query: str) -> str:
         type_ = _xml_or_html(self.type)
         return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)

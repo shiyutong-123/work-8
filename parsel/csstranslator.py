@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import threading
+from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
@@ -74,6 +75,42 @@ class TranslatorProtocol(Protocol):
         pass
 
 
+class _CSSTranslationCache:
+    """Thread-safe LRU cache for CSS-to-XPath translations.
+
+    Keys are ``(translator_type, css, prefix)`` tuples to prevent
+    type pollution between different translator types in concurrent
+    scenarios.
+    """
+
+    def __init__(self, maxsize: int = 256) -> None:
+        self._cache: OrderedDict[tuple[str, str, str], str] = OrderedDict()
+        self._maxsize = maxsize
+        self._lock = threading.RLock()
+
+    def get(self, key: tuple[str, str, str]) -> str | None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+                return self._cache[key]
+            return None
+
+    def set(self, key: tuple[str, str, str], value: str) -> None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = value
+            if len(self._cache) > self._maxsize:
+                self._cache.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._cache.clear()
+
+
+_translation_cache = _CSSTranslationCache()
+
+
 class TranslatorMixin:
     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
 
@@ -127,15 +164,23 @@ class TranslatorMixin:
 
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
-    @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+        key = ("generic", css, prefix)
+        result = _translation_cache.get(key)
+        if result is None:
+            result = super().css_to_xpath(css, prefix)
+            _translation_cache.set(key, result)
+        return result
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
-    @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+        key = ("html", css, prefix)
+        result = _translation_cache.get(key)
+        if result is None:
+            result = super().css_to_xpath(css, prefix)
+            _translation_cache.set(key, result)
+        return result
 
 
 _translator = HTMLTranslator()
