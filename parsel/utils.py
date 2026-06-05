@@ -6,6 +6,9 @@ from typing import TYPE_CHECKING, Any, cast
 from w3lib.html import replace_entities as w3lib_replace_entities
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
 
@@ -62,7 +65,8 @@ def _is_listlike(x: Any) -> bool:
     >>> _is_listlike(range(5))
     True
     """
-    return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
+    x_type = get_type_key(x)
+    return hasattr(x, "__iter__") and x_type not in ("str", "bytes")
 
 
 def extract_regex(
@@ -73,7 +77,7 @@ def extract_regex(
     * if the regex contains multiple numbered groups, all those will be returned (flattened)
     * if the regex doesn't contain any group the entire regex matching is returned
     """
-    if isinstance(regex, str):
+    if get_type_key(regex) == "str":
         regex = re.compile(regex, re.UNICODE)
 
     if "extract" in regex.groupindex:
@@ -103,3 +107,31 @@ def shorten(text: str, width: int, suffix: str = "...") -> str:
     if width >= 0:
         return suffix[len(suffix) - width :]
     raise ValueError("width must be equal or greater than 0")
+
+
+class MultiDispatcher:
+    def __init__(self) -> None:
+        self.registry: dict[str, Callable[..., Any]] = {}
+
+    def register(self, key: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+            self.registry[key] = func
+            return func
+        return decorator
+
+    def dispatch(self, key: str, *args: Any, **kwargs: Any) -> Any:
+        if key in self.registry:
+            return self.registry[key](*args, **kwargs)
+        raise TypeError(f"No handler registered for key: {key}")
+
+
+def get_type_key(obj: Any) -> str:
+    if hasattr(obj, "__iter__") and not hasattr(obj, "__len__"):
+        return "iterator"
+    try:
+        return obj.__class__.__name__
+    except AttributeError:
+        return "unknown"
+
+
+root_type_dispatcher = MultiDispatcher()
