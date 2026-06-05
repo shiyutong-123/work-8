@@ -127,15 +127,59 @@ class TranslatorMixin:
 
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
-    @lru_cache(maxsize=256)
+    def __init__(self) -> None:
+        super().__init__()
+        # 使用实例级别的缓存
+        self._css_to_xpath_cache: dict[tuple[str, str], str] = {}
+        self._cache_size = 0
+        self._max_cache_size = 256
+
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+        key = (css, prefix)
+        if key in self._css_to_xpath_cache:
+            return self._css_to_xpath_cache[key]
+        
+        result = super().css_to_xpath(css, prefix)
+        
+        # 简单的 LRU 实现：当超过最大大小时，清空一半缓存
+        if self._cache_size >= self._max_cache_size:
+            # 清空字典的一半（保留最近添加的）
+            keys_to_remove = list(self._css_to_xpath_cache.keys())[:self._max_cache_size // 2]
+            for k in keys_to_remove:
+                del self._css_to_xpath_cache[k]
+            self._cache_size = len(self._css_to_xpath_cache)
+        
+        self._css_to_xpath_cache[key] = result
+        self._cache_size += 1
+        return result
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
-    @lru_cache(maxsize=256)
+    def __init__(self) -> None:
+        super().__init__()
+        # 使用实例级别的缓存
+        self._css_to_xpath_cache: dict[tuple[str, str], str] = {}
+        self._cache_size = 0
+        self._max_cache_size = 256
+
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+        key = (css, prefix)
+        if key in self._css_to_xpath_cache:
+            return self._css_to_xpath_cache[key]
+        
+        result = super().css_to_xpath(css, prefix)
+        
+        # 简单的 LRU 实现：当超过最大大小时，清空一半缓存
+        if self._cache_size >= self._max_cache_size:
+            # 清空字典的一半（保留最近添加的）
+            keys_to_remove = list(self._css_to_xpath_cache.keys())[:self._max_cache_size // 2]
+            for k in keys_to_remove:
+                del self._css_to_xpath_cache[k]
+            self._cache_size = len(self._css_to_xpath_cache)
+        
+        self._css_to_xpath_cache[key] = result
+        self._cache_size += 1
+        return result
 
 
 _translator = HTMLTranslator()

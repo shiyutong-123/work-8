@@ -4,6 +4,7 @@ packages."""
 from __future__ import annotations
 
 import json
+import threading
 import typing
 import warnings
 from io import BytesIO
@@ -70,18 +71,28 @@ class CTGroupValue(TypedDict):
     _tostring_method: _TostringMethodType
 
 
-_ctgroup: dict[str, CTGroupValue] = {
-    "html": {
-        "_parser": html.HTMLParser,
-        "_csstranslator": HTMLTranslator(),
-        "_tostring_method": "html",
-    },
-    "xml": {
-        "_parser": SafeXMLParser,
-        "_csstranslator": GenericTranslator(),
-        "_tostring_method": "xml",
-    },
-}
+# 使用线程局部存储避免全局状态竞态条件
+class _CTGroupLocal(threading.local):
+    def __init__(self) -> None:
+        self._ctgroup: dict[str, CTGroupValue] = {
+            "html": {
+                "_parser": html.HTMLParser,
+                "_csstranslator": HTMLTranslator(),
+                "_tostring_method": "html",
+            },
+            "xml": {
+                "_parser": SafeXMLParser,
+                "_csstranslator": GenericTranslator(),
+                "_tostring_method": "xml",
+            },
+        }
+
+_ctgroup_local = _CTGroupLocal()
+
+
+def _get_ctgroup() -> dict[str, CTGroupValue]:
+    """获取当前线程的翻译器组"""
+    return _ctgroup_local._ctgroup
 
 
 def _xml_or_html(type_: str | None) -> str:
@@ -118,6 +129,18 @@ def create_root_node(
     if root is None:
         root = etree.fromstring(b"<html/>", parser=parser, base_url=base_url)
     return root
+
+
+def _get_parser(type_: str) -> type[_ParserType]:
+    return _get_ctgroup()[type_]["_parser"]
+
+
+def _get_csstranslator(type_: str) -> GenericTranslator | HTMLTranslator:
+    return _get_ctgroup()[type_]["_csstranslator"]
+
+
+def _get_tostring_method(type_: str) -> _TostringMethodType:
+    return _get_ctgroup()[type_]["_tostring_method"]
 
 
 class SelectorList(list[_SelectorType]):
@@ -296,7 +319,7 @@ _NOT_SET = object()
 
 
 def _get_root_from_text(text: str, *, type_: str, **lxml_kwargs: Any) -> etree._Element:
-    return create_root_node(text, _ctgroup[type_]["_parser"], **lxml_kwargs)
+    return create_root_node(text, _get_parser(type_), **lxml_kwargs)
 
 
 def _get_root_and_type_from_bytes(
@@ -323,7 +346,7 @@ def _get_root_and_type_from_bytes(
         text="",
         body=body,
         encoding=encoding,
-        parser_cls=_ctgroup[type_]["_parser"],
+        parser_cls=_get_parser(type_),
         **lxml_kwargs,
     )
     return root, type_
@@ -517,7 +540,7 @@ class Selector:
             text,
             body=body,
             encoding=encoding,
-            parser_cls=_ctgroup[type_ or self.type]["_parser"],
+            parser_cls=_get_parser(type_ or self.type),
             base_url=base_url,
             huge_tree=huge_tree,
         )
@@ -644,7 +667,7 @@ class Selector:
 
     def _css2xpath(self, query: str) -> str:
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        return _get_csstranslator(type_).css_to_xpath(query)
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """
@@ -713,7 +736,7 @@ class Selector:
         try:
             return etree.tostring(
                 self.root,
-                method=_ctgroup[self.type]["_tostring_method"],
+                method=_get_tostring_method(self.type),
                 encoding="unicode",
                 with_tail=False,
             )

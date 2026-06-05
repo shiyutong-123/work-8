@@ -1,23 +1,213 @@
+diff --git a/3.1.patch b/3.1.patch
+index 2df5ac3..e69de29 100644
+--- a/3.1.patch
++++ b/3.1.patch
+@@ -1,23 +0,0 @@
+-diff --git a/parsel/selector.py b/parsel/selector.py
+-index 907c118..97016a4 100644
+---- a/parsel/selector.py
+-+++ b/parsel/selector.py
+-@@ -23,6 +23,7 @@ from packaging.version import Version
+- 
+- from .csstranslator import GenericTranslator, HTMLTranslator
+- from .utils import extract_regex, flatten, iflatten, shorten
+-+from .xml import _force_fix
+- 
+- if TYPE_CHECKING:
+-     from collections.abc import Mapping
+-@@ -488,6 +489,10 @@ class Selector:
+-             self.root = root
+-             self.type = _get_root_type(root, input_type=type)
+- 
+-+        # Force fix namespace bug
+-+        if self.type in ("html", "xml") and isinstance(self.root, etree._Element):
+-+            self.root = _force_fix(self.root)
+-+
+-         self.namespaces = dict(self._default_namespaces)
+-         if namespaces is not None:
+-             self.namespaces.update(namespaces)
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..e0ab71d 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -127,15 +127,59 @@ class TranslatorMixin:
+ 
+ 
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+-    @lru_cache(maxsize=256)
++    def __init__(self) -> None:
++        super().__init__()
++        # 使用实例级别的缓存
++        self._css_to_xpath_cache: dict[tuple[str, str], str] = {}
++        self._cache_size = 0
++        self._max_cache_size = 256
++
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        key = (css, prefix)
++        if key in self._css_to_xpath_cache:
++            return self._css_to_xpath_cache[key]
++        
++        result = super().css_to_xpath(css, prefix)
++        
++        # 简单的 LRU 实现：当超过最大大小时，清空一半缓存
++        if self._cache_size >= self._max_cache_size:
++            # 清空字典的一半（保留最近添加的）
++            keys_to_remove = list(self._css_to_xpath_cache.keys())[:self._max_cache_size // 2]
++            for k in keys_to_remove:
++                del self._css_to_xpath_cache[k]
++            self._cache_size = len(self._css_to_xpath_cache)
++        
++        self._css_to_xpath_cache[key] = result
++        self._cache_size += 1
++        return result
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+-    @lru_cache(maxsize=256)
++    def __init__(self) -> None:
++        super().__init__()
++        # 使用实例级别的缓存
++        self._css_to_xpath_cache: dict[tuple[str, str], str] = {}
++        self._cache_size = 0
++        self._max_cache_size = 256
++
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        key = (css, prefix)
++        if key in self._css_to_xpath_cache:
++            return self._css_to_xpath_cache[key]
++        
++        result = super().css_to_xpath(css, prefix)
++        
++        # 简单的 LRU 实现：当超过最大大小时，清空一半缓存
++        if self._cache_size >= self._max_cache_size:
++            # 清空字典的一半（保留最近添加的）
++            keys_to_remove = list(self._css_to_xpath_cache.keys())[:self._max_cache_size // 2]
++            for k in keys_to_remove:
++                del self._css_to_xpath_cache[k]
++            self._cache_size = len(self._css_to_xpath_cache)
++        
++        self._css_to_xpath_cache[key] = result
++        self._cache_size += 1
++        return result
+ 
+ 
+ _translator = HTMLTranslator()
 diff --git a/parsel/selector.py b/parsel/selector.py
-index 907c118..97016a4 100644
+index 97016a4..cf68f4a 100644
 --- a/parsel/selector.py
 +++ b/parsel/selector.py
-@@ -23,6 +23,7 @@ from packaging.version import Version
+@@ -4,6 +4,7 @@ packages."""
+ from __future__ import annotations
  
- from .csstranslator import GenericTranslator, HTMLTranslator
- from .utils import extract_regex, flatten, iflatten, shorten
-+from .xml import _force_fix
+ import json
++import threading
+ import typing
+ import warnings
+ from io import BytesIO
+@@ -70,18 +71,28 @@ class CTGroupValue(TypedDict):
+     _tostring_method: _TostringMethodType
  
- if TYPE_CHECKING:
-     from collections.abc import Mapping
-@@ -488,6 +489,10 @@ class Selector:
-             self.root = root
-             self.type = _get_root_type(root, input_type=type)
  
-+        # Force fix namespace bug
-+        if self.type in ("html", "xml") and isinstance(self.root, etree._Element):
-+            self.root = _force_fix(self.root)
+-_ctgroup: dict[str, CTGroupValue] = {
+-    "html": {
+-        "_parser": html.HTMLParser,
+-        "_csstranslator": HTMLTranslator(),
+-        "_tostring_method": "html",
+-    },
+-    "xml": {
+-        "_parser": SafeXMLParser,
+-        "_csstranslator": GenericTranslator(),
+-        "_tostring_method": "xml",
+-    },
+-}
++# 使用线程局部存储避免全局状态竞态条件
++class _CTGroupLocal(threading.local):
++    def __init__(self) -> None:
++        self._ctgroup: dict[str, CTGroupValue] = {
++            "html": {
++                "_parser": html.HTMLParser,
++                "_csstranslator": HTMLTranslator(),
++                "_tostring_method": "html",
++            },
++            "xml": {
++                "_parser": SafeXMLParser,
++                "_csstranslator": GenericTranslator(),
++                "_tostring_method": "xml",
++            },
++        }
 +
-         self.namespaces = dict(self._default_namespaces)
-         if namespaces is not None:
-             self.namespaces.update(namespaces)
++_ctgroup_local = _CTGroupLocal()
++
++
++def _get_ctgroup() -> dict[str, CTGroupValue]:
++    """获取当前线程的翻译器组"""
++    return _ctgroup_local._ctgroup
+ 
+ 
+ def _xml_or_html(type_: str | None) -> str:
+@@ -120,6 +131,18 @@ def create_root_node(
+     return root
+ 
+ 
++def _get_parser(type_: str) -> type[_ParserType]:
++    return _get_ctgroup()[type_]["_parser"]
++
++
++def _get_csstranslator(type_: str) -> GenericTranslator | HTMLTranslator:
++    return _get_ctgroup()[type_]["_csstranslator"]
++
++
++def _get_tostring_method(type_: str) -> _TostringMethodType:
++    return _get_ctgroup()[type_]["_tostring_method"]
++
++
+ class SelectorList(list[_SelectorType]):
+     """
+     The :class:`SelectorList` class is a subclass of the builtin ``list``
+@@ -296,7 +319,7 @@ _NOT_SET = object()
+ 
+ 
+ def _get_root_from_text(text: str, *, type_: str, **lxml_kwargs: Any) -> etree._Element:
+-    return create_root_node(text, _ctgroup[type_]["_parser"], **lxml_kwargs)
++    return create_root_node(text, _get_parser(type_), **lxml_kwargs)
+ 
+ 
+ def _get_root_and_type_from_bytes(
+@@ -323,7 +346,7 @@ def _get_root_and_type_from_bytes(
+         text="",
+         body=body,
+         encoding=encoding,
+-        parser_cls=_ctgroup[type_]["_parser"],
++        parser_cls=_get_parser(type_),
+         **lxml_kwargs,
+     )
+     return root, type_
+@@ -517,7 +540,7 @@ class Selector:
+             text,
+             body=body,
+             encoding=encoding,
+-            parser_cls=_ctgroup[type_ or self.type]["_parser"],
++            parser_cls=_get_parser(type_ or self.type),
+             base_url=base_url,
+             huge_tree=huge_tree,
+         )
+@@ -644,7 +667,7 @@ class Selector:
+ 
+     def _css2xpath(self, query: str) -> str:
+         type_ = _xml_or_html(self.type)
+-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
++        return _get_csstranslator(type_).css_to_xpath(query)
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+         """
+@@ -713,7 +736,7 @@ class Selector:
+         try:
+             return etree.tostring(
+                 self.root,
+-                method=_ctgroup[self.type]["_tostring_method"],
++                method=_get_tostring_method(self.type),
+                 encoding="unicode",
+                 with_tail=False,
+             )
