@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from typing import TYPE_CHECKING, Any, cast
+from functools import singledispatch
 
 from w3lib.html import replace_entities as w3lib_replace_entities
 
@@ -41,6 +42,7 @@ def iflatten(x: Iterable[Any]) -> Iterator[Any]:
             yield el
 
 
+@singledispatch
 def _is_listlike(x: Any) -> bool:
     """
     >>> _is_listlike("foo")
@@ -62,8 +64,21 @@ def _is_listlike(x: Any) -> bool:
     >>> _is_listlike(range(5))
     True
     """
-    return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
+    return hasattr(x, "__iter__")
 
+@_is_listlike.register(str)
+@_is_listlike.register(bytes)
+def _is_listlike_str_bytes(x: Any) -> bool:
+    return False
+
+
+@singledispatch
+def _get_regex(regex: Any) -> "re.Pattern[str]":
+    return regex
+
+@_get_regex.register(str)
+def _get_regex_str(regex: str) -> "re.Pattern[str]":
+    return re.compile(regex, re.UNICODE)
 
 def extract_regex(
     regex: str | re.Pattern[str], text: str, replace_entities: bool = True
@@ -73,8 +88,7 @@ def extract_regex(
     * if the regex contains multiple numbered groups, all those will be returned (flattened)
     * if the regex doesn't contain any group the entire regex matching is returned
     """
-    if isinstance(regex, str):
-        regex = re.compile(regex, re.UNICODE)
+    regex = _get_regex(regex)
 
     if "extract" in regex.groupindex:
         # named group

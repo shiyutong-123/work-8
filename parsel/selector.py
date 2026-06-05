@@ -119,6 +119,16 @@ def create_root_node(
     return root
 
 
+from functools import singledispatch
+
+@singledispatch
+def _wrap_getitem(pos: Any, obj: Any, cls: Any) -> Any:
+    return typing.cast("_SelectorType", obj)
+
+@_wrap_getitem.register(slice)
+def _wrap_getitem_slice(pos: slice, obj: Any, cls: Any) -> Any:
+    return cls(typing.cast("SelectorList[_SelectorType]", obj))
+
 class SelectorList(list[_SelectorType]):
     """
     The :class:`SelectorList` class is a subclass of the builtin ``list``
@@ -137,9 +147,7 @@ class SelectorList(list[_SelectorType]):
         self, pos: SupportsIndex | slice
     ) -> _SelectorType | SelectorList[_SelectorType]:
         o = super().__getitem__(pos)
-        if isinstance(pos, slice):
-            return self.__class__(typing.cast("SelectorList[_SelectorType]", o))
-        return typing.cast("_SelectorType", o)
+        return _wrap_getitem(pos, o, self.__class__)
 
     def __getstate__(self) -> None:
         raise TypeError("can't pickle SelectorList objects")
@@ -347,17 +355,25 @@ def _get_root_and_type_from_text(
     return root, type_
 
 
+@singledispatch
 def _get_root_type(root: Any, *, input_type: str | None) -> str:
-    if isinstance(root, etree._Element):
-        if input_type in {"json", "text"}:
-            raise ValueError(
-                f"Selector got an lxml.etree._Element object as root, "
-                f"and {input_type!r} as type."
-            )
-        return _xml_or_html(input_type)
-    if isinstance(root, (dict, list)) or _is_valid_json(root):
+    if _is_valid_json(root):
         return "json"
     return input_type or "json"
+
+@_get_root_type.register(etree._Element)
+def _get_root_type_element(root: etree._Element, *, input_type: str | None) -> str:
+    if input_type in {"json", "text"}:
+        raise ValueError(
+            f"Selector got an lxml.etree._Element object as root, "
+            f"and {input_type!r} as type."
+        )
+    return _xml_or_html(input_type)
+
+@_get_root_type.register(dict)
+@_get_root_type.register(list)
+def _get_root_type_dict_list(root: Any, *, input_type: str | None) -> str:
+    return "json"
 
 
 def _is_valid_json(text: str) -> bool:
@@ -368,14 +384,67 @@ def _is_valid_json(text: str) -> bool:
     return True
 
 
-def _load_json_or_none(text: str) -> Any:
-    if isinstance(text, (str, bytes, bytearray)):
-        try:
-            return json.loads(text)
-        except ValueError:
-            return None
+@singledispatch
+def _load_json_or_none(text: Any) -> Any:
     return None
 
+@_load_json_or_none.register(str)
+@_load_json_or_none.register(bytes)
+@_load_json_or_none.register(bytearray)
+def _load_json_or_none_str(text: Any) -> Any:
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+@singledispatch
+def _validate_text(text: Any) -> None:
+    if text is not None:
+        msg = f"text argument should be of type str, got {text.__class__}"
+        raise TypeError(msg)
+
+@_validate_text.register(str)
+def _validate_text_str(text: str) -> None:
+    pass
+
+@singledispatch
+def _validate_body(body: Any) -> None:
+    msg = f"body argument should be of type bytes or bytearray, got {body.__class__}"
+    raise TypeError(msg)
+
+@_validate_body.register(bytes)
+@_validate_body.register(bytearray)
+def _validate_body_bytes(body: Any) -> None:
+    pass
+
+@singledispatch
+def _get_json_data(root: Any) -> Any:
+    return root
+
+@_get_json_data.register(str)
+def _get_json_data_str(root: str) -> Any:
+    return _load_json_or_none(root)
+
+@singledispatch
+def _ensure_list(result: Any) -> list:
+    return [result]
+
+@_ensure_list.register(list)
+def _ensure_list_list(result: list) -> list:
+    return result
+
+@_ensure_list.register(type(None))
+def _ensure_list_none(result: Any) -> list:
+    return []
+
+@singledispatch
+def _make_selector(x: Any, cls: Any, query: str) -> "Selector":
+    return cls(root=x, _expr=query)
+
+@_make_selector.register(str)
+def _make_selector_str(x: str, cls: Any, query: str) -> "Selector":
+    return cls(text=x, _expr=query, type="text")
 
 class Selector:
     """Wrapper for input data in HTML, JSON, or XML format, that allows
@@ -447,9 +516,7 @@ class Selector:
         if text is None and not body and root is _NOT_SET:
             raise ValueError("Selector needs text, body, or root arguments")
 
-        if text is not None and not isinstance(text, str):
-            msg = f"text argument should be of type str, got {text.__class__}"
-            raise TypeError(msg)
+        _validate_text(text)
 
         if text is not None:
             if root is not _NOT_SET:
@@ -457,9 +524,7 @@ class Selector:
                     "Selector got both text and root, root is being ignored.",
                     stacklevel=2,
                 )
-            if not isinstance(text, str):
-                msg = f"text argument should be of type str, got {text.__class__}"
-                raise TypeError(msg)
+            _validate_text(text)
 
             root, type = _get_root_and_type_from_text(  # noqa: A001
                 text,
@@ -470,9 +535,7 @@ class Selector:
             self.root = root
             self.type = type
         elif body:
-            if not isinstance(body, (bytes, bytearray)):
-                msg = f"body argument should be of type bytes or bytearray, got {body.__class__}"
-                raise TypeError(msg)
+            _validate_body(body)
             root, type = _get_root_and_type_from_bytes(  # noqa: A001
                 body=bytes(body),
                 encoding=encoding,
@@ -536,27 +599,15 @@ class Selector:
             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
         if self.type == "json":
-            if isinstance(self.root, str):
-                # Selector received a JSON string as root.
-                data = _load_json_or_none(self.root)
-            else:
-                data = self.root
+            data = _get_json_data(self.root)
         else:
             assert self.type in {"html", "xml"}  # nosec
             data = _load_json_or_none(self.root.text)
 
         result = jmespath.search(query, data, **kwargs)
-        if result is None:
-            result = []
-        elif not isinstance(result, list):
-            result = [result]
+        result = _ensure_list(result)
 
-        def make_selector(x: Any) -> Selector:  # closure function
-            if isinstance(x, str):
-                return self.__class__(text=x, _expr=query, type="text")
-            return self.__class__(root=x, _expr=query)
-
-        result = [make_selector(x) for x in result]
+        result = [_make_selector(x, self.__class__, query) for x in result]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
     def xpath(
@@ -608,8 +659,7 @@ class Selector:
         except etree.XPathError as exc:
             raise ValueError(f"XPath error: {exc} in {query}")
 
-        if not isinstance(result, list):
-            result = [result]
+        result = _ensure_list(result)
 
         result = [
             self.__class__(
@@ -793,6 +843,15 @@ class Selector:
             return {}
 
         return dict(self.root.attrib)
+
+    def __call__(
+        self,
+        _tag: Any,
+        attrib: Any = None,
+        nsmap: Any = None,
+        **_extra: Any,
+    ) -> etree._Element:
+        return etree.Element(_tag, attrib=attrib, nsmap=nsmap, **_extra)
 
     def __bool__(self) -> bool:
         """
