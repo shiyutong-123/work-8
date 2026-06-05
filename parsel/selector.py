@@ -23,6 +23,7 @@ from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
 from .utils import extract_regex, flatten, iflatten, shorten
+from .xml import _force_fix
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -491,6 +492,8 @@ class Selector:
         self.namespaces = dict(self._default_namespaces)
         if namespaces is not None:
             self.namespaces.update(namespaces)
+        if self.type == "xml":
+            self.root, self.namespaces = _force_fix(self.root, self.namespaces)
 
         self._expr = _expr
         self._huge_tree = huge_tree
