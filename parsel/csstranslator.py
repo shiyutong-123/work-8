@@ -9,8 +9,9 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
+from .utils import _sanitize_query
+
 if TYPE_CHECKING:
-    # typing.Self requires Python 3.11
     from typing_extensions import Self
 
 
@@ -70,7 +71,7 @@ class TranslatorProtocol(Protocol):
     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
         pass
 
-    def css_to_xpath(self, css: str, prefix: str = ...) -> str:
+    def css_to_xpath(self, css: dict[str, str], prefix: str = ...) -> dict[str, str]:
         pass
 
 
@@ -128,19 +129,29 @@ class TranslatorMixin:
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+    def _css_to_xpath_cached(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
+
+    def css_to_xpath(self, css: dict[str, str], prefix: str = "descendant-or-self::") -> dict[str, str]:
+        sanitized = _sanitize_query(css)
+        xpath_str = self._css_to_xpath_cached(sanitized, prefix)
+        return {"raw": xpath_str}
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+    def _css_to_xpath_cached(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
+
+    def css_to_xpath(self, css: dict[str, str], prefix: str = "descendant-or-self::") -> dict[str, str]:
+        sanitized = _sanitize_query(css)
+        xpath_str = self._css_to_xpath_cached(sanitized, prefix)
+        return {"raw": xpath_str}
 
 
 _translator = HTMLTranslator()
 
 
-def css2xpath(query: str) -> str:
+def css2xpath(query: dict[str, str]) -> dict[str, str]:
     """Return translated XPath version of a given CSS query"""
     return _translator.css_to_xpath(query)

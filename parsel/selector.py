@@ -22,7 +22,7 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -99,7 +99,7 @@ def create_root_node(
     if not text:
         body = body.replace(b"\x00", b"").strip()
     else:
-        body = text.strip().replace("\x00", "").encode(encoding) or b"<html/>"
+        body = _sanitize_query({"raw": text}).encode(encoding) or b"<html/>"
 
     if huge_tree and LXML_SUPPORTS_HUGE_TREE:
         parser = parser_cls(recover=True, encoding=encoding, huge_tree=True)
@@ -144,7 +144,7 @@ class SelectorList(list[_SelectorType]):
     def __getstate__(self) -> None:
         raise TypeError("can't pickle SelectorList objects")
 
-    def jmespath(self, query: str, **kwargs: Any) -> SelectorList[_SelectorType]:
+    def jmespath(self, query: dict[str, str], **kwargs: Any) -> SelectorList[_SelectorType]:
         """
         Call the ``.jmespath()`` method for each element in this list and return
         their results flattened as another :class:`SelectorList`.
@@ -154,13 +154,13 @@ class SelectorList(list[_SelectorType]):
         Any additional named arguments are passed to the underlying
         ``jmespath.search`` call, e.g.::
 
-            selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
+            selector.jmespath({'raw': 'author.name'}, options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
         return self.__class__(flatten([x.jmespath(query, **kwargs) for x in self]))
 
     def xpath(
         self,
-        xpath: str,
+        xpath: dict[str, str],
         namespaces: Mapping[str, str] | None = None,
         **kwargs: Any,
     ) -> SelectorList[_SelectorType]:
@@ -178,13 +178,13 @@ class SelectorList(list[_SelectorType]):
         Any additional named arguments can be used to pass values for XPath
         variables in the XPath expression, e.g.::
 
-            selector.xpath('//a[href=$url]', url="http://www.example.com")
+            selector.xpath({'raw': '//a[href=$url]'}, url="http://www.example.com")
         """
         return self.__class__(
             flatten([x.xpath(xpath, namespaces=namespaces, **kwargs) for x in self])
         )
 
-    def css(self, query: str) -> SelectorList[_SelectorType]:
+    def css(self, query: dict[str, str]) -> SelectorList[_SelectorType]:
         """
         Call the ``.css()`` method for each element in this list and return
         their results flattened as another :class:`SelectorList`.
@@ -519,7 +519,7 @@ class Selector:
 
     def jmespath(
         self,
-        query: str,
+        query: dict[str, str],
         **kwargs: Any,
     ) -> SelectorList[Self]:
         """
@@ -527,17 +527,17 @@ class Selector:
         :class:`SelectorList` instance with all elements flattened. List
         elements implement :class:`Selector` interface too.
 
-        ``query`` is a string containing the `JMESPath
-        <https://jmespath.org/>`_ query to apply.
+        ``query`` is a dictionary with key ``raw`` containing the `JMESPath
+        <https://jmespath.org/>`_ query string to apply.
 
         Any additional named arguments are passed to the underlying
         ``jmespath.search`` call, e.g.::
 
-            selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
+            selector.jmespath({'raw': 'author.name'}, options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
+        sanitized_query = _sanitize_query(query)
         if self.type == "json":
             if isinstance(self.root, str):
-                # Selector received a JSON string as root.
                 data = _load_json_or_none(self.root)
             else:
                 data = self.root
@@ -545,23 +545,23 @@ class Selector:
             assert self.type in {"html", "xml"}  # nosec
             data = _load_json_or_none(self.root.text)
 
-        result = jmespath.search(query, data, **kwargs)
+        result = jmespath.search(sanitized_query, data, **kwargs)
         if result is None:
             result = []
         elif not isinstance(result, list):
             result = [result]
 
-        def make_selector(x: Any) -> Selector:  # closure function
+        def make_selector(x: Any) -> Selector:
             if isinstance(x, str):
-                return self.__class__(text=x, _expr=query, type="text")
-            return self.__class__(root=x, _expr=query)
+                return self.__class__(text=x, _expr=sanitized_query, type="text")
+            return self.__class__(root=x, _expr=sanitized_query)
 
         result = [make_selector(x) for x in result]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
     def xpath(
         self,
-        query: str,
+        query: dict[str, str],
         namespaces: Mapping[str, str] | None = None,
         **kwargs: Any,
     ) -> SelectorList[Self]:
@@ -570,7 +570,8 @@ class Selector:
         :class:`SelectorList` instance with all elements flattened. List
         elements implement :class:`Selector` interface too.
 
-        ``query`` is a string containing the XPATH query to apply.
+        ``query`` is a dictionary with key ``raw`` containing the XPATH query
+        string to apply.
 
         ``namespaces`` is an optional ``prefix: namespace-uri`` mapping (dict)
         for additional prefixes to those registered with ``register_namespace(prefix, uri)``.
@@ -580,8 +581,9 @@ class Selector:
         Any additional named arguments can be used to pass values for XPath
         variables in the XPath expression, e.g.::
 
-            selector.xpath('//a[href=$url]', url="http://www.example.com")
+            selector.xpath({'raw': '//a[href=$url]'}, url="http://www.example.com")
         """
+        sanitized_query = _sanitize_query(query)
         if self.type not in ("html", "xml", "text"):
             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
         if self.type in ("html", "xml"):
@@ -600,13 +602,13 @@ class Selector:
             nsp.update(namespaces)
         try:
             result = xpathev(
-                query,
+                sanitized_query,
                 namespaces=nsp,
                 smart_strings=self._lxml_smart_strings,
                 **kwargs,
             )
         except etree.XPathError as exc:
-            raise ValueError(f"XPath error: {exc} in {query}")
+            raise ValueError(f"XPath error: {exc} in {sanitized_query}")
 
         if not isinstance(result, list):
             result = [result]
@@ -614,7 +616,7 @@ class Selector:
         result = [
             self.__class__(
                 root=x,
-                _expr=query,
+                _expr=sanitized_query,
                 namespaces=self.namespaces,
                 type=_xml_or_html(self.type),
             )
@@ -622,11 +624,12 @@ class Selector:
         ]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
-    def css(self, query: str) -> SelectorList[Self]:
+    def css(self, query: dict[str, str]) -> SelectorList[Self]:
         """
         Apply the given CSS selector and return a :class:`SelectorList` instance.
 
-        ``query`` is a string containing the CSS selector to apply.
+        ``query`` is a dictionary with key ``raw`` containing the CSS selector
+        string to apply.
 
         In the background, CSS queries are translated into XPath queries using
         `cssselect`_ library and run ``.xpath()`` method.
@@ -637,7 +640,7 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
-    def _css2xpath(self, query: str) -> str:
+    def _css2xpath(self, query: dict[str, str]) -> dict[str, str]:
         type_ = _xml_or_html(self.type)
         return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
 

@@ -94,6 +94,11 @@ def extract_regex(
     return [w3lib_replace_entities(s, keep=["lt", "amp"]) for s in strings]
 
 
+def _sanitize_query(data: dict[str, str]) -> str:
+    raw = data["raw"]
+    return raw.strip().replace("\x00", "")
+
+
 def shorten(text: str, width: int, suffix: str = "...") -> str:
     """Truncate the given text to fit in the given width."""
     if len(text) <= width:
