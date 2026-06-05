@@ -103,3 +103,17 @@ def shorten(text: str, width: int, suffix: str = "...") -> str:
     if width >= 0:
         return suffix[len(suffix) - width :]
     raise ValueError("width must be equal or greater than 0")
+
+
+def _sanitize_query(data: dict[str, str]) -> dict[str, str]:
+    """Sanitize query string by stripping whitespace and removing null bytes.
+    
+    Args:
+        data: A dictionary with 'raw' key containing the string to sanitize.
+        
+    Returns:
+        A dictionary with 'raw' key containing the sanitized string.
+    """
+    raw = data["raw"]
+    sanitized = raw.strip().replace("\x00", "")
+    return {"raw": sanitized}
