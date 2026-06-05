@@ -9,6 +9,8 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
+from .utils import _sanitize_query, RawQueryData
+
 if TYPE_CHECKING:
     # typing.Self requires Python 3.11
     from typing_extensions import Self
@@ -128,19 +130,27 @@ class TranslatorMixin:
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+    def css_to_xpath(self, css: str | RawQueryData, prefix: str = "descendant-or-self::") -> str:
+        if isinstance(css, dict):
+            css_str = _sanitize_query(css)
+        else:
+            css_str = css
+        return super().css_to_xpath(css_str, prefix)
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+    def css_to_xpath(self, css: str | RawQueryData, prefix: str = "descendant-or-self::") -> str:
+        if isinstance(css, dict):
+            css_str = _sanitize_query(css)
+        else:
+            css_str = css
+        return super().css_to_xpath(css_str, prefix)
 
 
 _translator = HTMLTranslator()
 
 
-def css2xpath(query: str) -> str:
+def css2xpath(query: str | RawQueryData) -> str:
     """Return translated XPath version of a given CSS query"""
     return _translator.css_to_xpath(query)

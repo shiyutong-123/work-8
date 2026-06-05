@@ -22,7 +22,7 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import extract_regex, flatten, iflatten, shorten, _sanitize_query, RawQueryData
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -144,7 +144,7 @@ class SelectorList(list[_SelectorType]):
     def __getstate__(self) -> None:
         raise TypeError("can't pickle SelectorList objects")
 
-    def jmespath(self, query: str, **kwargs: Any) -> SelectorList[_SelectorType]:
+    def jmespath(self, query: str | RawQueryData, **kwargs: Any) -> SelectorList[_SelectorType]:
         """
         Call the ``.jmespath()`` method for each element in this list and return
         their results flattened as another :class:`SelectorList`.
@@ -160,7 +160,7 @@ class SelectorList(list[_SelectorType]):
 
     def xpath(
         self,
-        xpath: str,
+        xpath: str | RawQueryData,
         namespaces: Mapping[str, str] | None = None,
         **kwargs: Any,
     ) -> SelectorList[_SelectorType]:
@@ -184,7 +184,7 @@ class SelectorList(list[_SelectorType]):
             flatten([x.xpath(xpath, namespaces=namespaces, **kwargs) for x in self])
         )
 
-    def css(self, query: str) -> SelectorList[_SelectorType]:
+    def css(self, query: str | RawQueryData) -> SelectorList[_SelectorType]:
         """
         Call the ``.css()`` method for each element in this list and return
         their results flattened as another :class:`SelectorList`.
@@ -519,7 +519,7 @@ class Selector:
 
     def jmespath(
         self,
-        query: str,
+        query: str | RawQueryData,
         **kwargs: Any,
     ) -> SelectorList[Self]:
         """
@@ -535,6 +535,11 @@ class Selector:
 
             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
+        if isinstance(query, dict):
+            query_str = _sanitize_query(query)
+        else:
+            query_str = query
+        
         if self.type == "json":
             if isinstance(self.root, str):
                 # Selector received a JSON string as root.
@@ -545,7 +550,7 @@ class Selector:
             assert self.type in {"html", "xml"}  # nosec
             data = _load_json_or_none(self.root.text)
 
-        result = jmespath.search(query, data, **kwargs)
+        result = jmespath.search(query_str, data, **kwargs)
         if result is None:
             result = []
         elif not isinstance(result, list):
@@ -561,7 +566,7 @@ class Selector:
 
     def xpath(
         self,
-        query: str,
+        query: str | RawQueryData,
         namespaces: Mapping[str, str] | None = None,
         **kwargs: Any,
     ) -> SelectorList[Self]:
@@ -582,6 +587,11 @@ class Selector:
 
             selector.xpath('//a[href=$url]', url="http://www.example.com")
         """
+        if isinstance(query, dict):
+            query_str = _sanitize_query(query)
+        else:
+            query_str = query
+        
         if self.type not in ("html", "xml", "text"):
             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
         if self.type in ("html", "xml"):
@@ -600,7 +610,7 @@ class Selector:
             nsp.update(namespaces)
         try:
             result = xpathev(
-                query,
+                query_str,
                 namespaces=nsp,
                 smart_strings=self._lxml_smart_strings,
                 **kwargs,
@@ -622,7 +632,7 @@ class Selector:
         ]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
-    def css(self, query: str) -> SelectorList[Self]:
+    def css(self, query: str | RawQueryData) -> SelectorList[Self]:
         """
         Apply the given CSS selector and return a :class:`SelectorList` instance.
 
@@ -637,9 +647,13 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
-    def _css2xpath(self, query: str) -> str:
+    def _css2xpath(self, query: str | RawQueryData) -> str:
+        if isinstance(query, dict):
+            query_str = _sanitize_query(query)
+        else:
+            query_str = query
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query_str)
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """

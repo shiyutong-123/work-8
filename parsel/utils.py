@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, cast, TypedDict
 
 from w3lib.html import replace_entities as w3lib_replace_entities
+
+
+class RawQueryData(TypedDict):
+    raw: str
+
+
+def _sanitize_query(data: RawQueryData) -> str:
+    """
+    Sanitize query data.
+    data must be a dictionary with 'raw' key containing the query string.
+    """
+    return data['raw']
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
