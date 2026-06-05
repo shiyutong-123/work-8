@@ -22,7 +22,7 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -535,6 +535,7 @@ class Selector:
 
             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
         """
+        sanitized_query = _sanitize_query({"raw": query})
         if self.type == "json":
             if isinstance(self.root, str):
                 # Selector received a JSON string as root.
@@ -545,7 +546,7 @@ class Selector:
             assert self.type in {"html", "xml"}  # nosec
             data = _load_json_or_none(self.root.text)
 
-        result = jmespath.search(query, data, **kwargs)
+        result = jmespath.search(sanitized_query, data, **kwargs)
         if result is None:
             result = []
         elif not isinstance(result, list):
@@ -553,8 +554,8 @@ class Selector:
 
         def make_selector(x: Any) -> Selector:  # closure function
             if isinstance(x, str):
-                return self.__class__(text=x, _expr=query, type="text")
-            return self.__class__(root=x, _expr=query)
+                return self.__class__(text=x, _expr=sanitized_query, type="text")
+            return self.__class__(root=x, _expr=sanitized_query)
 
         result = [make_selector(x) for x in result]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
@@ -582,6 +583,7 @@ class Selector:
 
             selector.xpath('//a[href=$url]', url="http://www.example.com")
         """
+        sanitized_query = _sanitize_query({"raw": query})
         if self.type not in ("html", "xml", "text"):
             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
         if self.type in ("html", "xml"):
@@ -600,13 +602,13 @@ class Selector:
             nsp.update(namespaces)
         try:
             result = xpathev(
-                query,
+                sanitized_query,
                 namespaces=nsp,
                 smart_strings=self._lxml_smart_strings,
                 **kwargs,
             )
         except etree.XPathError as exc:
-            raise ValueError(f"XPath error: {exc} in {query}")
+            raise ValueError(f"XPath error: {exc} in {sanitized_query}")
 
         if not isinstance(result, list):
             result = [result]
@@ -614,7 +616,7 @@ class Selector:
         result = [
             self.__class__(
                 root=x,
-                _expr=query,
+                _expr=sanitized_query,
                 namespaces=self.namespaces,
                 type=_xml_or_html(self.type),
             )
@@ -638,8 +640,9 @@ class Selector:
         return self.xpath(self._css2xpath(query))
 
     def _css2xpath(self, query: str) -> str:
+        sanitized_query = _sanitize_query({"raw": query})
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        return _ctgroup[type_]["_csstranslator"].css_to_xpath(sanitized_query)
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """

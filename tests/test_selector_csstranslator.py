@@ -169,6 +169,14 @@ def test_css2xpath() -> None:
     assert css2xpath(".some-class") == expected_xpath
 
 
+def test_css2xpath_sanitizes_query() -> None:
+    expected_xpath = (
+        "descendant-or-self::*[@class and contains("
+        "concat(' ', normalize-space(@class), ' '), ' some-class ')]"
+    )
+    assert css2xpath("  .some-class\x00  ") == expected_xpath
+
+
 class TestCSSSelector:
     sel = Selector(text=HTMLBODY)
 

@@ -1,0 +1,192 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..84a63f4 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -9,6 +9,8 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
++from .utils import _sanitize_query
++
+ if TYPE_CHECKING:
+     # typing.Self requires Python 3.11
+     from typing_extensions import Self
+@@ -129,13 +131,15 @@ class TranslatorMixin:
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        sanitized_css = _sanitize_query({"raw": css})
++        return super().css_to_xpath(sanitized_css, prefix)
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        sanitized_css = _sanitize_query({"raw": css})
++        return super().css_to_xpath(sanitized_css, prefix)
+ 
+ 
+ _translator = HTMLTranslator()
+@@ -143,4 +147,5 @@ _translator = HTMLTranslator()
+ 
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+-    return _translator.css_to_xpath(query)
++    sanitized_query = _sanitize_query({"raw": query})
++    return _translator.css_to_xpath(sanitized_query)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..4b38cd9 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -22,7 +22,7 @@ from lxml import etree, html
+ from packaging.version import Version
+ 
+ from .csstranslator import GenericTranslator, HTMLTranslator
+-from .utils import extract_regex, flatten, iflatten, shorten
++from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Mapping
+@@ -535,6 +535,7 @@ class Selector:
+ 
+             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
+         """
++        sanitized_query = _sanitize_query({"raw": query})
+         if self.type == "json":
+             if isinstance(self.root, str):
+                 # Selector received a JSON string as root.
+@@ -545,7 +546,7 @@ class Selector:
+             assert self.type in {"html", "xml"}  # nosec
+             data = _load_json_or_none(self.root.text)
+ 
+-        result = jmespath.search(query, data, **kwargs)
++        result = jmespath.search(sanitized_query, data, **kwargs)
+         if result is None:
+             result = []
+         elif not isinstance(result, list):
+@@ -553,8 +554,8 @@ class Selector:
+ 
+         def make_selector(x: Any) -> Selector:  # closure function
+             if isinstance(x, str):
+-                return self.__class__(text=x, _expr=query, type="text")
+-            return self.__class__(root=x, _expr=query)
++                return self.__class__(text=x, _expr=sanitized_query, type="text")
++            return self.__class__(root=x, _expr=sanitized_query)
+ 
+         result = [make_selector(x) for x in result]
+         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
+@@ -582,6 +583,7 @@ class Selector:
+ 
+             selector.xpath('//a[href=$url]', url="http://www.example.com")
+         """
++        sanitized_query = _sanitize_query({"raw": query})
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
+         if self.type in ("html", "xml"):
+@@ -600,13 +602,13 @@ class Selector:
+             nsp.update(namespaces)
+         try:
+             result = xpathev(
+-                query,
++                sanitized_query,
+                 namespaces=nsp,
+                 smart_strings=self._lxml_smart_strings,
+                 **kwargs,
+             )
+         except etree.XPathError as exc:
+-            raise ValueError(f"XPath error: {exc} in {query}")
++            raise ValueError(f"XPath error: {exc} in {sanitized_query}")
+ 
+         if not isinstance(result, list):
+             result = [result]
+@@ -614,7 +616,7 @@ class Selector:
+         result = [
+             self.__class__(
+                 root=x,
+-                _expr=query,
++                _expr=sanitized_query,
+                 namespaces=self.namespaces,
+                 type=_xml_or_html(self.type),
+             )
+@@ -638,8 +640,9 @@ class Selector:
+         return self.xpath(self._css2xpath(query))
+ 
+     def _css2xpath(self, query: str) -> str:
++        sanitized_query = _sanitize_query({"raw": query})
+         type_ = _xml_or_html(self.type)
+-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
++        return _ctgroup[type_]["_csstranslator"].css_to_xpath(sanitized_query)
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+         """
+diff --git a/parsel/utils.py b/parsel/utils.py
+index 528a163..b32f656 100644
+--- a/parsel/utils.py
++++ b/parsel/utils.py
+@@ -65,6 +65,15 @@ def _is_listlike(x: Any) -> bool:
+     return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
+ 
+ 
++def _sanitize_query(data: dict[str, str]) -> str:
++    if not isinstance(data, dict):
++        raise TypeError("data must be a dict with a 'raw' string value")
++    raw = data.get("raw")
++    if not isinstance(raw, str):
++        raise TypeError("data must be a dict with a 'raw' string value")
++    return raw.replace("\x00", "").strip()
++
++
+ def extract_regex(
+     regex: str | re.Pattern[str], text: str, replace_entities: bool = True
+ ) -> list[str]:
+diff --git a/tests/test_selector.py b/tests/test_selector.py
+index 5d5b98e..dc55374 100644
+--- a/tests/test_selector.py
++++ b/tests/test_selector.py
+@@ -676,6 +676,10 @@ class TestSelector:
+         with pytest.raises(ValueError, match=re.escape(xpath)):
+             x.xpath(xpath)
+ 
++    def test_xpath_sanitizes_query(self) -> None:
++        x = self.sscls(text="<html><body><span>value</span></body></html>")
++        assert x.xpath("  //span/text()\x00  ").getall() == ["value"]
++
+     def test_http_header_encoding_precedence(self) -> None:
+         # '\xa3'     = pound symbol in unicode
+         # '\xc2\xa3' = pound symbol in utf-8
+diff --git a/tests/test_selector_csstranslator.py b/tests/test_selector_csstranslator.py
+index 597fc08..9d22e57 100644
+--- a/tests/test_selector_csstranslator.py
++++ b/tests/test_selector_csstranslator.py
+@@ -169,6 +169,14 @@ def test_css2xpath() -> None:
+     assert css2xpath(".some-class") == expected_xpath
+ 
+ 
++def test_css2xpath_sanitizes_query() -> None:
++    expected_xpath = (
++        "descendant-or-self::*[@class and contains("
++        "concat(' ', normalize-space(@class), ' '), ' some-class ')]"
++    )
++    assert css2xpath("  .some-class\x00  ") == expected_xpath
++
++
+ class TestCSSSelector:
+     sel = Selector(text=HTMLBODY)
+ 
+diff --git a/tests/test_selector_jmespath.py b/tests/test_selector_jmespath.py
+index 218b9c1..602eafc 100644
+--- a/tests/test_selector_jmespath.py
++++ b/tests/test_selector_jmespath.py
+@@ -145,6 +145,10 @@ class TestJMESPath:
+             r"(\d+)"
+         ) == ["18", "32", "22", "25"]
+ 
++    def test_jmespath_sanitizes_query(self) -> None:
++        selector = Selector(text='{"items": [{"name": "A"}]}')
++        assert selector.jmespath("  items[*].name\x00  ").getall() == ["A"]
++
+     def test_json_types(self) -> None:
+         for text, root in (
+             ("{}", {}),

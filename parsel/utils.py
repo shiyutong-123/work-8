@@ -65,6 +65,15 @@ def _is_listlike(x: Any) -> bool:
     return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
 
 
+def _sanitize_query(data: dict[str, str]) -> str:
+    if not isinstance(data, dict):
+        raise TypeError("data must be a dict with a 'raw' string value")
+    raw = data.get("raw")
+    if not isinstance(raw, str):
+        raise TypeError("data must be a dict with a 'raw' string value")
+    return raw.replace("\x00", "").strip()
+
+
 def extract_regex(
     regex: str | re.Pattern[str], text: str, replace_entities: bool = True
 ) -> list[str]:

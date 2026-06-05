@@ -676,6 +676,10 @@ class TestSelector:
         with pytest.raises(ValueError, match=re.escape(xpath)):
             x.xpath(xpath)
 
+    def test_xpath_sanitizes_query(self) -> None:
+        x = self.sscls(text="<html><body><span>value</span></body></html>")
+        assert x.xpath("  //span/text()\x00  ").getall() == ["value"]
+
     def test_http_header_encoding_precedence(self) -> None:
         # '\xa3'     = pound symbol in unicode
         # '\xc2\xa3' = pound symbol in utf-8

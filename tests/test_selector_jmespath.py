@@ -145,6 +145,10 @@ class TestJMESPath:
             r"(\d+)"
         ) == ["18", "32", "22", "25"]
 
+    def test_jmespath_sanitizes_query(self) -> None:
+        selector = Selector(text='{"items": [{"name": "A"}]}')
+        assert selector.jmespath("  items[*].name\x00  ").getall() == ["A"]
+
     def test_json_types(self) -> None:
         for text, root in (
             ("{}", {}),
