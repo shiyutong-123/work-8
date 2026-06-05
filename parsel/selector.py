@@ -7,14 +7,17 @@ import json
 import typing
 import warnings
 from io import BytesIO
+from threading import Lock
 from typing import (
     TYPE_CHECKING,
     Any,
+    Callable,
     Literal,
     SupportsIndex,
     TypeAlias,
     TypedDict,
     TypeVar,
+    cast,
 )
 
 import jmespath
@@ -30,6 +33,26 @@ if TYPE_CHECKING:
 
     # typing.Self requires Python 3.11
     from typing_extensions import Self
+
+
+class _st_cache:
+    def __init__(self, maxsize: int = 256) -> None:
+        self.maxsize = maxsize
+        self.cache: dict[tuple[str, str], str] = {}
+        self.lock = Lock()
+
+    def __call__(self, func: Callable[[Any, str], str]) -> Callable[[Any, str], str]:
+        @typing.no_type_check
+        def wrapper(instance: Any, query: str) -> str:
+            type_ = _xml_or_html(instance.type)
+            key = (type_, query)
+            with self.lock:
+                if key not in self.cache:
+                    if len(self.cache) >= self.maxsize:
+                        self.cache.pop(next(iter(self.cache)))
+                    self.cache[key] = func(instance, query)
+                return self.cache[key]
+        return wrapper
 
 
 _SelectorType = TypeVar("_SelectorType", bound="Selector")
@@ -637,6 +660,7 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
+    @_st_cache(maxsize=256)
     def _css2xpath(self, query: str) -> str:
         type_ = _xml_or_html(self.type)
         return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)

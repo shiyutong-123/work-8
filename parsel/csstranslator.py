@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from functools import lru_cache
+import threading
 from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
@@ -127,20 +127,23 @@ class TranslatorMixin:
 
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
-    @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
-    @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
-_translator = HTMLTranslator()
+class _TranslatorContainer(threading.local):
+    def __init__(self) -> None:
+        self.translator = HTMLTranslator()
+
+
+_translator_container = _TranslatorContainer()
 
 
 def css2xpath(query: str) -> str:
     """Return translated XPath version of a given CSS query"""
-    return _translator.css_to_xpath(query)
+    return _translator_container.translator.css_to_xpath(query)
