@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, TypedDict, cast
 
 from w3lib.html import replace_entities as w3lib_replace_entities
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
+
+
+class QueryData(TypedDict):
+    raw: str
+
+
+def _sanitize_query(data: QueryData) -> str:
+    if not isinstance(data, dict):
+        raise TypeError(f"data argument should be of type dict, got {data.__class__}")
+
+    raw = data.get("raw")
+    if not isinstance(raw, str):
+        raise TypeError(f"data['raw'] should be of type str, got {raw.__class__}")
+
+    return raw
 
 
 def flatten(x: Iterable[Any]) -> list[Any]:

@@ -1,0 +1,167 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..e8528cd 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -9,6 +9,8 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
++from .utils import _sanitize_query
++
+ if TYPE_CHECKING:
+     # typing.Self requires Python 3.11
+     from typing_extensions import Self
+@@ -129,13 +131,17 @@ class TranslatorMixin:
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        sanitized_css = _sanitize_query({"raw": css})
++        sanitized_prefix = _sanitize_query({"raw": prefix})
++        return super().css_to_xpath(sanitized_css, sanitized_prefix)
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        sanitized_css = _sanitize_query({"raw": css})
++        sanitized_prefix = _sanitize_query({"raw": prefix})
++        return super().css_to_xpath(sanitized_css, sanitized_prefix)
+ 
+ 
+ _translator = HTMLTranslator()
+@@ -143,4 +149,5 @@ _translator = HTMLTranslator()
+ 
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+-    return _translator.css_to_xpath(query)
++    sanitized_query = _sanitize_query({"raw": query})
++    return _translator.css_to_xpath(sanitized_query)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..27bdb0b 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -22,7 +22,7 @@ from lxml import etree, html
+ from packaging.version import Version
+ 
+ from .csstranslator import GenericTranslator, HTMLTranslator
+-from .utils import extract_regex, flatten, iflatten, shorten
++from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Mapping
+@@ -535,6 +535,8 @@ class Selector:
+ 
+             selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
+         """
++        sanitized_query = _sanitize_query({"raw": query})
++
+         if self.type == "json":
+             if isinstance(self.root, str):
+                 # Selector received a JSON string as root.
+@@ -545,7 +547,7 @@ class Selector:
+             assert self.type in {"html", "xml"}  # nosec
+             data = _load_json_or_none(self.root.text)
+ 
+-        result = jmespath.search(query, data, **kwargs)
++        result = jmespath.search(sanitized_query, data, **kwargs)
+         if result is None:
+             result = []
+         elif not isinstance(result, list):
+@@ -553,8 +555,8 @@ class Selector:
+ 
+         def make_selector(x: Any) -> Selector:  # closure function
+             if isinstance(x, str):
+-                return self.__class__(text=x, _expr=query, type="text")
+-            return self.__class__(root=x, _expr=query)
++                return self.__class__(text=x, _expr=sanitized_query, type="text")
++            return self.__class__(root=x, _expr=sanitized_query)
+ 
+         result = [make_selector(x) for x in result]
+         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
+@@ -582,6 +584,8 @@ class Selector:
+ 
+             selector.xpath('//a[href=$url]', url="http://www.example.com")
+         """
++        sanitized_query = _sanitize_query({"raw": query})
++
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
+         if self.type in ("html", "xml"):
+@@ -600,13 +604,13 @@ class Selector:
+             nsp.update(namespaces)
+         try:
+             result = xpathev(
+-                query,
++                sanitized_query,
+                 namespaces=nsp,
+                 smart_strings=self._lxml_smart_strings,
+                 **kwargs,
+             )
+         except etree.XPathError as exc:
+-            raise ValueError(f"XPath error: {exc} in {query}")
++            raise ValueError(f"XPath error: {exc} in {sanitized_query}")
+ 
+         if not isinstance(result, list):
+             result = [result]
+@@ -614,7 +618,7 @@ class Selector:
+         result = [
+             self.__class__(
+                 root=x,
+-                _expr=query,
++                _expr=sanitized_query,
+                 namespaces=self.namespaces,
+                 type=_xml_or_html(self.type),
+             )
+@@ -635,11 +639,12 @@ class Selector:
+         """
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
+-        return self.xpath(self._css2xpath(query))
++        return self.xpath(self._css2xpath({"raw": query}))
+ 
+-    def _css2xpath(self, query: str) -> str:
++    def _css2xpath(self, query_data: dict[str, str]) -> str:
++        sanitized_query = _sanitize_query(query_data)
+         type_ = _xml_or_html(self.type)
+-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
++        return _ctgroup[type_]["_csstranslator"].css_to_xpath(sanitized_query)
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+         """
+diff --git a/parsel/utils.py b/parsel/utils.py
+index 528a163..4b0dd9c 100644
+--- a/parsel/utils.py
++++ b/parsel/utils.py
+@@ -1,7 +1,7 @@
+ from __future__ import annotations
+ 
+ import re
+-from typing import TYPE_CHECKING, Any, cast
++from typing import TYPE_CHECKING, Any, TypedDict, cast
+ 
+ from w3lib.html import replace_entities as w3lib_replace_entities
+ 
+@@ -9,6 +9,21 @@ if TYPE_CHECKING:
+     from collections.abc import Iterable, Iterator
+ 
+ 
++class QueryData(TypedDict):
++    raw: str
++
++
++def _sanitize_query(data: QueryData) -> str:
++    if not isinstance(data, dict):
++        raise TypeError(f"data argument should be of type dict, got {data.__class__}")
++
++    raw = data.get("raw")
++    if not isinstance(raw, str):
++        raise TypeError(f"data['raw'] should be of type str, got {raw.__class__}")
++
++    return raw
++
++
+ def flatten(x: Iterable[Any]) -> list[Any]:
+     """flatten(sequence) -> list
+     Returns a single, flat list which contains all elements retrieved
