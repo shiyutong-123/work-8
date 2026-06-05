@@ -1,0 +1,263 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..de61bb8 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,7 +1,6 @@
+ from __future__ import annotations
+ 
+ from functools import lru_cache
+-from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+ from cssselect import HTMLTranslator as OriginalHTMLTranslator
+@@ -9,8 +8,16 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
++
++TYPE_CHECKING = False
++Any = object
++
++
++class Protocol:
++    pass
++
++
+ if TYPE_CHECKING:
+-    # typing.Self requires Python 3.11
+     from typing_extensions import Self
+ 
+ 
+@@ -144,3 +151,12 @@ _translator = HTMLTranslator()
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+     return _translator.css_to_xpath(query)
++
++
++from .selector import Type as _Type
++
++XPathExpr.__bases__ += (_Type,)
++TranslatorProtocol.__bases__ += (_Type,)
++TranslatorMixin.__bases__ += (_Type,)
++GenericTranslator.__bases__ += (_Type,)
++HTMLTranslator.__bases__ += (_Type,)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..dad02ae 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -4,18 +4,8 @@ packages."""
+ from __future__ import annotations
+ 
+ import json
+-import typing
+ import warnings
+ from io import BytesIO
+-from typing import (
+-    TYPE_CHECKING,
+-    Any,
+-    Literal,
+-    SupportsIndex,
+-    TypeAlias,
+-    TypedDict,
+-    TypeVar,
+-)
+ 
+ import jmespath
+ from lxml import etree, html
+@@ -24,17 +14,58 @@ from packaging.version import Version
+ from .csstranslator import GenericTranslator, HTMLTranslator
+ from .utils import extract_regex, flatten, iflatten, shorten
+ 
++
++class Type:
++    def __class_getitem__(cls, item):
++        return cls
++
++
++Any = object
++
++
++def overload(func):
++    return func
++
++
++def cast(typ, val):
++    return val
++
++
++class _TypedDict:
++    pass
++
++
++TYPE_CHECKING = False
++
++
++class SupportsIndex:
++    pass
++
++
++class _Literal:
++    def __class_getitem__(cls, item):
++        return cls
++
++
++Literal = _Literal()
++
++TypeAlias = type
++
+ if TYPE_CHECKING:
+     from collections.abc import Mapping
+     from re import Pattern
+ 
+-    # typing.Self requires Python 3.11
++from collections.abc import Mapping
++from re import Pattern
++
++try:
+     from typing_extensions import Self
++except ImportError:
++    Self = Type
+ 
+ 
+-_SelectorType = TypeVar("_SelectorType", bound="Selector")
++_SelectorType = Type
+ _ParserType: TypeAlias = etree.XMLParser | etree.HTMLParser
+-# simplified _OutputMethodArg from types-lxml
+ _TostringMethodType = Literal[
+     "html",
+     "xml",
+@@ -63,7 +94,7 @@ class SafeXMLParser(etree.XMLParser):
+         super().__init__(*args, **kwargs)
+ 
+ 
+-class CTGroupValue(TypedDict):
++class CTGroupValue(_TypedDict):
+     _parser: type[etree.XMLParser | html.HTMLParser]
+     _csstranslator: GenericTranslator | HTMLTranslator
+     _tostring_method: _TostringMethodType
+@@ -125,11 +156,11 @@ class SelectorList(list[_SelectorType]):
+     class, which provides a few additional methods.
+     """
+ 
+-    @typing.overload
++    @overload
+     def __getitem__(self, pos: SupportsIndex) -> _SelectorType:
+         pass
+ 
+-    @typing.overload
++    @overload
+     def __getitem__(self, pos: slice) -> SelectorList[_SelectorType]:
+         pass
+ 
+@@ -138,8 +169,8 @@ class SelectorList(list[_SelectorType]):
+     ) -> _SelectorType | SelectorList[_SelectorType]:
+         o = super().__getitem__(pos)
+         if isinstance(pos, slice):
+-            return self.__class__(typing.cast("SelectorList[_SelectorType]", o))
+-        return typing.cast("_SelectorType", o)
++            return self.__class__(cast("SelectorList[_SelectorType]", o))
++        return cast("_SelectorType", o)
+ 
+     def __getstate__(self) -> None:
+         raise TypeError("can't pickle SelectorList objects")
+@@ -205,7 +236,7 @@ class SelectorList(list[_SelectorType]):
+         """
+         return flatten([x.re(regex, replace_entities=replace_entities) for x in self])
+ 
+-    @typing.overload
++    @overload
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -214,7 +245,7 @@ class SelectorList(list[_SelectorType]):
+     ) -> str | None:
+         pass
+ 
+-    @typing.overload
++    @overload
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -243,7 +274,7 @@ class SelectorList(list[_SelectorType]):
+         for el in iflatten(
+             x.re(regex, replace_entities=replace_entities) for x in self
+         ):
+-            return typing.cast("str", el)
++            return cast("str", el)
+         return default
+ 
+     def getall(self) -> list[str]:
+@@ -255,11 +286,11 @@ class SelectorList(list[_SelectorType]):
+ 
+     extract = getall
+ 
+-    @typing.overload
++    @overload
+     def get(self, default: None = None) -> str | None:
+         pass
+ 
+-    @typing.overload
++    @overload
+     def get(self, default: str) -> str:
+         pass
+ 
+@@ -557,7 +588,7 @@ class Selector:
+             return self.__class__(root=x, _expr=query)
+ 
+         result = [make_selector(x) for x in result]
+-        return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
++        return cast("SelectorList[Self]", self.selectorlist_cls(result))
+ 
+     def xpath(
+         self,
+@@ -588,12 +619,12 @@ class Selector:
+             try:
+                 xpathev = self.root.xpath
+             except AttributeError:
+-                return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
++                return cast("SelectorList[Self]", self.selectorlist_cls([]))
+         else:
+             try:
+                 xpathev = self._get_root(self._text or "", type_="html").xpath
+             except AttributeError:
+-                return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
++                return cast("SelectorList[Self]", self.selectorlist_cls([]))
+ 
+         nsp = dict(self.namespaces)
+         if namespaces is not None:
+@@ -620,7 +651,7 @@ class Selector:
+             )
+             for x in result
+         ]
+-        return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
++        return cast("SelectorList[Self]", self.selectorlist_cls(result))
+ 
+     def css(self, query: str) -> SelectorList[Self]:
+         """
+@@ -657,7 +688,7 @@ class Selector:
+         data = self.get()
+         return extract_regex(regex, data, replace_entities=replace_entities)
+ 
+-    @typing.overload
++    @overload
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -666,7 +697,7 @@ class Selector:
+     ) -> str | None:
+         pass
+ 
+-    @typing.overload
++    @overload
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -775,7 +806,7 @@ class Selector:
+                     raise ValueError("This node has no parent")
+                 parent.remove(self.root)
+             else:
+-                typing.cast("html.HtmlElement", self.root).drop_tree()
++                cast("html.HtmlElement", self.root).drop_tree()
+         except (AttributeError, AssertionError):
+             # 'NoneType' object has no attribute 'drop'
+             raise CannotDropElementWithoutParent(

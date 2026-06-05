@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
 from cssselect import HTMLTranslator as OriginalHTMLTranslator
@@ -9,8 +8,16 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
+
+TYPE_CHECKING = False
+Any = object
+
+
+class Protocol:
+    pass
+
+
 if TYPE_CHECKING:
-    # typing.Self requires Python 3.11
     from typing_extensions import Self
 
 
@@ -144,3 +151,12 @@ _translator = HTMLTranslator()
 def css2xpath(query: str) -> str:
     """Return translated XPath version of a given CSS query"""
     return _translator.css_to_xpath(query)
+
+
+from .selector import Type as _Type
+
+XPathExpr.__bases__ += (_Type,)
+TranslatorProtocol.__bases__ += (_Type,)
+TranslatorMixin.__bases__ += (_Type,)
+GenericTranslator.__bases__ += (_Type,)
+HTMLTranslator.__bases__ += (_Type,)
