@@ -103,3 +103,10 @@ def shorten(text: str, width: int, suffix: str = "...") -> str:
     if width >= 0:
         return suffix[len(suffix) - width :]
     raise ValueError("width must be equal or greater than 0")
+
+
+def get_text(selector):
+    """Get text content from selector or selector list"""
+    if hasattr(selector, 'getall'):
+        return selector.getall()
+    return selector.get()

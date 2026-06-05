@@ -1,0 +1,45 @@
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..44c6a2e 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -290,6 +290,12 @@ class SelectorList(list[_SelectorType]):
+         for x in self:
+             x.drop()
+ 
++    def pipe(self, func_name, *args, **kwargs):
++        import sys
++        utils_module = sys.modules['parsel.utils']
++        func = getattr(utils_module, func_name)
++        return func(self, *args, **kwargs)
++
+ 
+ _NOT_SET = object()
+ 
+@@ -807,6 +813,12 @@ class Selector:
+     def __str__(self) -> str:
+         return str(self.get())
+ 
++    def pipe(self, func_name, *args, **kwargs):
++        import sys
++        utils_module = sys.modules['parsel.utils']
++        func = getattr(utils_module, func_name)
++        return func(self, *args, **kwargs)
++
+     def __repr__(self) -> str:
+         data = repr(shorten(str(self.get()), width=40))
+         return f"<{type(self).__name__} query={self._expr!r} data={data}>"
+diff --git a/parsel/utils.py b/parsel/utils.py
+index 528a163..82671ed 100644
+--- a/parsel/utils.py
++++ b/parsel/utils.py
+@@ -103,3 +103,10 @@ def shorten(text: str, width: int, suffix: str = "...") -> str:
+     if width >= 0:
+         return suffix[len(suffix) - width :]
+     raise ValueError("width must be equal or greater than 0")
++
++
++def get_text(selector):
++    """Get text content from selector or selector list"""
++    if hasattr(selector, 'getall'):
++        return selector.getall()
++    return selector.get()

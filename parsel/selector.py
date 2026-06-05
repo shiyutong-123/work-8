@@ -290,6 +290,12 @@ class SelectorList(list[_SelectorType]):
         for x in self:
             x.drop()
 
+    def pipe(self, func_name, *args, **kwargs):
+        import sys
+        utils_module = sys.modules['parsel.utils']
+        func = getattr(utils_module, func_name)
+        return func(self, *args, **kwargs)
+
 
 _NOT_SET = object()
 
@@ -806,6 +812,12 @@ class Selector:
 
     def __str__(self) -> str:
         return str(self.get())
+
+    def pipe(self, func_name, *args, **kwargs):
+        import sys
+        utils_module = sys.modules['parsel.utils']
+        func = getattr(utils_module, func_name)
+        return func(self, *args, **kwargs)
 
     def __repr__(self) -> str:
         data = repr(shorten(str(self.get()), width=40))
