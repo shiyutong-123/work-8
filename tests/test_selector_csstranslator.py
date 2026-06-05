@@ -166,7 +166,7 @@ def test_css2xpath() -> None:
         "descendant-or-self::*[@class and contains("
         "concat(' ', normalize-space(@class), ' '), ' some-class ')]"
     )
-    assert css2xpath(".some-class") == expected_xpath
+    assert css2xpath({"raw": ".some-class"}) == expected_xpath
 
 
 class TestCSSSelector:
@@ -176,30 +176,30 @@ class TestCSSSelector:
         return [v.strip() for v in self.sel.css(*a, **kw).extract() if v.strip()]
 
     def test_selector_simple(self) -> None:
-        for x in self.sel.css("input"):
+        for x in self.sel.css({"raw": "input"}):
             assert isinstance(x, self.sel.__class__), x
-        assert self.sel.css("input").extract() == [
-            x.extract() for x in self.sel.css("input")
+        assert self.sel.css({"raw": "input"}).extract() == [
+            x.extract() for x in self.sel.css({"raw": "input"})
         ]
 
     def test_text_pseudo_element(self) -> None:
-        assert self.x("#p-b2") == ['<b id="p-b2">guy</b>']
-        assert self.x("#p-b2::text") == ["guy"]
-        assert self.x("#p-b2 ::text") == ["guy"]
-        assert self.x("#paragraph::text") == ["lorem ipsum text"]
-        assert self.x("#paragraph ::text") == ["lorem ipsum text", "hi", "there", "guy"]
-        assert self.x("p::text") == ["lorem ipsum text"]
-        assert self.x("p ::text") == ["lorem ipsum text", "hi", "there", "guy"]
+        assert self.x({"raw": "#p-b2"}) == ['<b id="p-b2">guy</b>']
+        assert self.x({"raw": "#p-b2::text"}) == ["guy"]
+        assert self.x({"raw": "#p-b2 ::text"}) == ["guy"]
+        assert self.x({"raw": "#paragraph::text"}) == ["lorem ipsum text"]
+        assert self.x({"raw": "#paragraph ::text"}) == ["lorem ipsum text", "hi", "there", "guy"]
+        assert self.x({"raw": "p::text"}) == ["lorem ipsum text"]
+        assert self.x({"raw": "p ::text"}) == ["lorem ipsum text", "hi", "there", "guy"]
 
     def test_attribute_function(self) -> None:
-        assert self.x("#p-b2::attr(id)") == ["p-b2"]
-        assert self.x(".cool-footer::attr(class)") == ["cool-footer"]
-        assert self.x(".cool-footer ::attr(id)") == ["foobar-div", "foobar-span"]
-        assert self.x('map[name="dummymap"] ::attr(shape)') == ["circle", "default"]
+        assert self.x({"raw": "#p-b2::attr(id)"}) == ["p-b2"]
+        assert self.x({"raw": ".cool-footer::attr(class)"}) == ["cool-footer"]
+        assert self.x({"raw": ".cool-footer ::attr(id)"}) == ["foobar-div", "foobar-span"]
+        assert self.x({"raw": 'map[name="dummymap"] ::attr(shape)'}) == ["circle", "default"]
 
     def test_nested_selector(self) -> None:
-        assert self.sel.css("p").css("b::text").extract() == ["hi", "guy"]
-        assert self.sel.css("div").css("area:last-child").extract() == [
+        assert self.sel.css({"raw": "p"}).css({"raw": "b::text"}).extract() == ["hi", "guy"]
+        assert self.sel.css({"raw": "div"}).css({"raw": "area:last-child"}).extract() == [
             '<area shape="default" id="area-nohref">'
         ]
 
@@ -208,7 +208,7 @@ class TestCSSSelector:
         reason="Support added in cssselect 1.2.0",
     )
     def test_pseudoclass_has(self) -> None:
-        assert self.x("p:has(b)::text") == ["lorem ipsum text"]
+        assert self.x({"raw": "p:has(b)::text"}) == ["lorem ipsum text"]
 
 
 class TestCSSSelectorBytes(TestCSSSelector):

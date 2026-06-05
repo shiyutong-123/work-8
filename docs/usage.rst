@@ -11,7 +11,7 @@ For HTML or XML, use `CSS`_ or `XPath`_ expressions to select data::
     >>> from parsel import Selector
     >>> html_text = "<html><body><h1>Hello, Parsel!</h1></body></html>"
     >>> html_selector = Selector(text=html_text)
-    >>> html_selector.css('h1')
+    >>> html_selector.css({'raw': 'h1'})
     [<Selector query='descendant-or-self::h1' data='<h1>Hello, Parsel!</h1>'>]
     >>> html_selector.xpath('//h1')  # the same, but now with XPath
     [<Selector query='//h1' data='<h1>Hello, Parsel!</h1>'>]
@@ -119,7 +119,7 @@ page, let's construct an XPath for selecting the text inside the title tag::
 
 You can also ask the same thing using CSS instead::
 
-    >>> selector.css('title::text')
+    >>> selector.css({'raw': 'title::text'})
     [<Selector query='descendant-or-self::title/text()' data='Example website'>]
 
 To actually extract the textual data, you must call the selector ``.get()``
@@ -137,14 +137,14 @@ is returned. ``.getall()`` returns a list with all results.
 Notice that CSS selectors can select text or attribute nodes using CSS3
 pseudo-elements::
 
-    >>> selector.css('title::text').get()
+    >>> selector.css({'raw': 'title::text'}).get()
     'Example website'
 
 As you can see, ``.xpath()`` and ``.css()`` methods return a
 :class:`~parsel.selector.SelectorList` instance, which is a list of new
 selectors. This API can be used for quickly selecting nested data::
 
-    >>> selector.css('img').xpath('@src').getall()
+    >>> selector.css({'raw': 'img'}).xpath('@src').getall()
     ['image1_thumb.jpg',
      'image2_thumb.jpg',
      'image3_thumb.jpg',
@@ -166,7 +166,7 @@ It returns ``None`` if no element was found::
 Instead of using e.g. ``'@src'`` XPath it is possible to query for attributes
 using ``.attrib`` property of a :class:`~parsel.selector.Selector`::
 
-    >>> [img.attrib['src'] for img in selector.css('img')]
+    >>> [img.attrib['src'] for img in selector.css({'raw': 'img'})]
     ['image1_thumb.jpg',
      'image2_thumb.jpg',
      'image3_thumb.jpg',
@@ -176,13 +176,13 @@ using ``.attrib`` property of a :class:`~parsel.selector.Selector`::
 As a shortcut, ``.attrib`` is also available on SelectorList directly;
 it returns attributes for the first matching element::
 
-    >>> selector.css('img').attrib['src']
+    >>> selector.css({'raw': 'img'}).attrib['src']
     'image1_thumb.jpg'
 
 This is most useful when only a single result is expected, e.g. when selecting
 by id, or selecting unique elements on a web page::
 
-    >>> selector.css('base').attrib['href']
+    >>> selector.css({'raw': 'base'}).attrib['href']
     'http://example.com/'
 
 Now we're going to get the base URL and some image links::
@@ -190,10 +190,10 @@ Now we're going to get the base URL and some image links::
     >>> selector.xpath('//base/@href').get()
     'http://example.com/'
 
-    >>> selector.css('base::attr(href)').get()
+    >>> selector.css({'raw': 'base::attr(href)'}).get()
     'http://example.com/'
 
-    >>> selector.css('base').attrib['href']
+    >>> selector.css({'raw': 'base'}).attrib['href']
     'http://example.com/'
 
     >>> selector.xpath('//a[contains(@href, "image")]/@href').getall()
@@ -203,7 +203,7 @@ Now we're going to get the base URL and some image links::
      'image4.html',
      'image5.html']
 
-    >>> selector.css('a[href*=image]::attr(href)').getall()
+    >>> selector.css({'raw': 'a[href*=image]::attr(href)'}).getall()
     ['image1.html',
      'image2.html',
      'image3.html',
@@ -217,7 +217,7 @@ Now we're going to get the base URL and some image links::
      'image4_thumb.jpg',
      'image5_thumb.jpg']
 
-    >>> selector.css('a[href*=image] img::attr(src)').getall()
+    >>> selector.css({'raw': 'a[href*=image] img::attr(src)'}).getall()
     ['image1_thumb.jpg',
      'image2_thumb.jpg',
      'image3_thumb.jpg',
@@ -247,12 +247,12 @@ Examples:
 
 * ``title::text`` selects children text nodes of a descendant ``<title>`` element::
 
-    >>> selector.css('title::text').get()
+    >>> selector.css({'raw': 'title::text'}).get()
     'Example website'
 
 * ``*::text`` selects all descendant text nodes of the current selector context::
 
-    >>> selector.css('#images *::text').getall()
+    >>> selector.css({'raw': '#images *::text'}).getall()
     ['\n   ',
      'Name: My image 1 ',
      '\n   ',
@@ -267,7 +267,7 @@ Examples:
 
 * ``a::attr(href)`` selects the *href* attribute value of descendant links::
 
-    >>> selector.css('a::attr(href)').getall()
+    >>> selector.css({'raw': 'a::attr(href)'}).getall()
     ['image1.html',
      'image2.html',
      'image3.html',
@@ -329,14 +329,14 @@ it is possible to filter by attribute value.
 parsel also provides an extension to CSS selectors (``::attr(...)``)
 which allows to get attribute values::
 
-    >>> selector.css('a::attr(href)').getall()
+    >>> selector.css({'raw': 'a::attr(href)'}).getall()
     ['image1.html', 'image2.html', 'image3.html', 'image4.html', 'image5.html']
 
 In addition to that, there is a ``.attrib`` property of Selector.
 You can use it if you prefer to lookup attributes in Python
 code, without using XPaths or CSS extensions::
 
-    >>> [a.attrib['href'] for a in selector.css('a')]
+    >>> [a.attrib['href'] for a in selector.css({'raw': 'a'})]
     ['image1.html', 'image2.html', 'image3.html', 'image4.html', 'image5.html']
 
 This property is also available on SelectorList; it returns a dictionary
@@ -344,14 +344,14 @@ with attributes of a first matching element. It is convenient to use when
 a selector is expected to give a single result (e.g. when selecting by element
 ID, or when selecting an unique element on a page)::
 
-    >>> selector.css('base').attrib
+    >>> selector.css({'raw': 'base'}).attrib
     {'href': 'http://example.com/'}
-    >>> selector.css('base').attrib['href']
+    >>> selector.css({'raw': 'base'}).attrib['href']
     'http://example.com/'
 
 ``.attrib`` property of an empty SelectorList is empty::
 
-    >>> selector.css('foo').attrib
+    >>> selector.css({'raw': 'foo'}).attrib
     {}
 
 Using selectors with regular expressions
@@ -745,7 +745,7 @@ you can just select by class using CSS and then switch to XPath when needed::
 
     >>> from parsel import Selector
     >>> sel = Selector(text='<div class="hero shout"><time datetime="2014-07-23 19:00">Special date</time></div>')
-    >>> sel.css('.shout').xpath('./time/@datetime').getall()
+    >>> sel.css({'raw': '.shout'}).xpath('./time/@datetime').getall()
     ['2014-07-23 19:00']
 
 This is cleaner than using the verbose XPath trick shown above. Just remember
@@ -832,28 +832,28 @@ The following examples show how these methods map to each other.
 
 1. ``SelectorList.get()`` is the same as ``SelectorList.extract_first()``::
 
-     >>> selector.css('a::attr(href)').get()
+     >>> selector.css({'raw': 'a::attr(href)'}).get()
      'image1.html'
-     >>> selector.css('a::attr(href)').extract_first()
+     >>> selector.css({'raw': 'a::attr(href)'}).extract_first()
      'image1.html'
 
 2. ``SelectorList.getall()`` is the same as ``SelectorList.extract()``::
 
-     >>> selector.css('a::attr(href)').getall()
+     >>> selector.css({'raw': 'a::attr(href)'}).getall()
      ['image1.html', 'image2.html', 'image3.html', 'image4.html', 'image5.html']
-     >>> selector.css('a::attr(href)').extract()
+     >>> selector.css({'raw': 'a::attr(href)'}).extract()
      ['image1.html', 'image2.html', 'image3.html', 'image4.html', 'image5.html']
 
 3. ``Selector.get()`` is the same as ``Selector.extract()``::
 
-     >>> selector.css('a::attr(href)')[0].get()
+     >>> selector.css({'raw': 'a::attr(href)'})[0].get()
      'image1.html'
-     >>> selector.css('a::attr(href)')[0].extract()
+     >>> selector.css({'raw': 'a::attr(href)'})[0].extract()
      'image1.html'
 
 4. For consistency, there is also ``Selector.getall()``, which returns a list::
 
-    >>> selector.css('a::attr(href)')[0].getall()
+    >>> selector.css({'raw': 'a::attr(href)'})[0].getall()
     ['image1.html']
 
 With the ``.extract()`` method it was not always obvious if a result is a list
@@ -889,7 +889,7 @@ If you want to use a CSS selector that takes into account all root elements,
 you need to precede your CSS query by an XPath query that reaches all root
 elements::
 
-    selector.xpath('/*').css('<your CSS selector>')
+    selector.xpath('/*').css({'raw': '<your CSS selector>'})
 
 
 Command-Line Interface Tools
@@ -1149,9 +1149,9 @@ On those occasions, use the function :func:`~parsel.css2xpath`:
 ::
 
     >>> from parsel import css2xpath
-    >>> css2xpath('h1.title')
+    >>> css2xpath({'raw': 'h1.title'})
     "descendant-or-self::h1[@class and contains(concat(' ', normalize-space(@class), ' '), ' title ')]"
-    >>> css2xpath('.profile-data') + '//h2'
+    >>> css2xpath({'raw': '.profile-data'}) + '//h2'
     "descendant-or-self::*[@class and contains(concat(' ', normalize-space(@class), ' '), ' profile-data ')]//h2"
 
 As you can see from the examples above, it returns the translated CSS query

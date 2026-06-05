@@ -42,7 +42,7 @@ class TestJMESPath:
             == "<div><a>a<br>b</a>c</div><div><a>d</a>e<b>f</b></div>"
         )
         assert sel.jmespath("html").xpath("//div/a/text()").getall() == ["a", "b", "d"]
-        assert sel.jmespath("html").css("div > b").getall() == ["<b>f</b>"]
+        assert sel.jmespath("html").css({"raw": "div > b"}).getall() == ["<b>f</b>"]
         assert cast("int", sel.jmespath("content").jmespath("name.age").get()) == 18
 
     def test_html_has_json(self) -> None:

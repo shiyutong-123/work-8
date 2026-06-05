@@ -9,6 +9,8 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
+from .utils import _sanitize_query
+
 if TYPE_CHECKING:
     # typing.Self requires Python 3.11
     from typing_extensions import Self
@@ -141,6 +143,6 @@ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
 _translator = HTMLTranslator()
 
 
-def css2xpath(query: str) -> str:
+def css2xpath(query: dict[str, str]) -> str:
     """Return translated XPath version of a given CSS query"""
-    return _translator.css_to_xpath(query)
+    return _translator.css_to_xpath(_sanitize_query(query))

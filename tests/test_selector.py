@@ -43,8 +43,8 @@ class TestSelector:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li")
-        empty_sel_list = sel.css("p")
+        sel_list = sel.css({"raw": "li"})
+        empty_sel_list = sel.css({"raw": "p"})
         self.assertIsSelectorList(sel_list)
         self.assertIsSelectorList(empty_sel_list)
         with pytest.raises(TypeError):
@@ -154,15 +154,15 @@ class TestSelector:
         """
         sel = self.sscls(text=body)
         assert sel.attrib == {"lang": "en", "version": "1.0"}
-        assert sel.css("ul")[0].attrib == {"id": "some-list", "class": "list-cls"}
+        assert sel.css({"raw": "ul"})[0].attrib == {"id": "some-list", "class": "list-cls"}
 
         # for a SelectorList, bring the attributes of first-element only
-        assert sel.css("ul").attrib == {"id": "some-list", "class": "list-cls"}
-        assert sel.css("li").attrib == {"class": "item-cls", "id": "list-item-1"}
-        assert sel.css("body").attrib == {}
-        assert sel.css("non-existing-element").attrib == {}
+        assert sel.css({"raw": "ul"}).attrib == {"id": "some-list", "class": "list-cls"}
+        assert sel.css({"raw": "li"}).attrib == {"class": "item-cls", "id": "list-item-1"}
+        assert sel.css({"raw": "body"}).attrib == {}
+        assert sel.css({"raw": "non-existing-element"}).attrib == {}
 
-        assert [e.attrib for e in sel.css("li")] == [
+        assert [e.attrib for e in sel.css({"raw": "li"})] == [
             {"class": "item-cls", "id": "list-item-1"},
             {"class": "item-cls active", "id": "list-item-2"},
             {"class": "item-cls", "id": "list-item-3"},
@@ -293,7 +293,7 @@ class TestSelector:
         assert type(self.sscls(text=text).xpath("//p")[0]) is type(
             self.sscls(text=text)
         )
-        assert type(self.sscls(text=text).css("p")[0]) is type(self.sscls(text=text))
+        assert type(self.sscls(text=text).css({"raw": "p"})[0]) is type(self.sscls(text=text))
 
     def test_boolean_result(self) -> None:
         body = "<p><input name='a'value='1'/><input name='b'value='2'/></p>"
@@ -338,11 +338,11 @@ class TestSelector:
     def test_slicing(self) -> None:
         text = "<div><p>1</p><p>2</p><p>3</p></div>"
         hs = self.sscls(text=text, type="html")
-        self.assertIsSelector(hs.css("p")[2])
-        self.assertIsSelectorList(hs.css("p")[2:3])
-        self.assertIsSelectorList(hs.css("p")[:2])
-        assert hs.css("p")[2:3].extract() == ["<p>3</p>"]
-        assert hs.css("p")[1:3].extract() == ["<p>2</p>", "<p>3</p>"]
+        self.assertIsSelector(hs.css({"raw": "p"})[2])
+        self.assertIsSelectorList(hs.css({"raw": "p"})[2:3])
+        self.assertIsSelectorList(hs.css({"raw": "p"})[:2])
+        assert hs.css({"raw": "p"})[2:3].extract() == ["<p>3</p>"]
+        assert hs.css({"raw": "p"})[1:3].extract() == ["<p>2</p>", "<p>3</p>"]
 
     def test_nested_selectors(self) -> None:
         """Nested selector tests"""
@@ -422,8 +422,8 @@ class TestSelector:
                     <div class="dos"><p>text</p><a href='#'>foo</a></div>
                </body>"""
         sel = self.sscls(text=body)
-        assert sel.xpath('//div[@id="1"]').css("span::text").extract() == ["me"]
-        assert sel.css("#1").xpath("./span/text()").extract() == ["me"]
+        assert sel.xpath('//div[@id="1"]').css({"raw": "span::text"}).extract() == ["me"]
+        assert sel.css({"raw": "#1"}).xpath("./span/text()").extract() == ["me"]
 
     def test_dont_strip(self) -> None:
         sel = self.sscls(text='<div>fff: <a href="#">zzz</a></div>')
@@ -868,9 +868,9 @@ class TestSelector:
         sel = MySelector(text="<html><div>foo</div></html>")
         assert isinstance(sel.xpath("//div"), MySelectorList)
         assert isinstance(sel.xpath("//div")[0], MySelector)
-        assert isinstance(sel.css("div"), MySelectorList)
-        assert isinstance(sel.css("div")[0], MySelector)
-        content: str = sel.css("div")[0].extra_method()
+        assert isinstance(sel.css({"raw": "div"}), MySelectorList)
+        assert isinstance(sel.css({"raw": "div"})[0], MySelector)
+        content: str = sel.css({"raw": "div"})[0].extra_method()
         assert content == "extra<div>foo</div>"
 
     def test_replacement_null_char_from_body(self) -> None:
@@ -881,60 +881,60 @@ class TestSelector:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li")
+        sel_list = sel.css({"raw": "li"})
         sel_list.drop()
-        self.assertIsSelectorList(sel.css("li"))
-        assert sel.css("li") == []
+        self.assertIsSelectorList(sel.css({"raw": "li"}))
+        assert sel.css({"raw": "li"}) == []
 
     def test_remove_selector(self) -> None:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li")
+        sel_list = sel.css({"raw": "li"})
         sel_list[0].drop()
-        self.assertIsSelectorList(sel.css("li"))
-        assert sel.css("li::text").getall() == ["2", "3"]
+        self.assertIsSelectorList(sel.css({"raw": "li"}))
+        assert sel.css({"raw": "li::text"}).getall() == ["2", "3"]
 
     def test_remove_pseudo_element_selector_list(self) -> None:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li::text")
+        sel_list = sel.css({"raw": "li::text"})
         assert sel_list.getall() == ["1", "2", "3"]
         with pytest.raises(CannotRemoveElementWithoutRoot):
             sel_list.drop()
 
-        self.assertIsSelectorList(sel.css("li"))
-        assert sel.css("li::text").getall() == ["1", "2", "3"]
+        self.assertIsSelectorList(sel.css({"raw": "li"}))
+        assert sel.css({"raw": "li::text"}).getall() == ["1", "2", "3"]
 
     def test_remove_pseudo_element_selector(self) -> None:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li::text")
+        sel_list = sel.css({"raw": "li::text"})
         assert sel_list.getall() == ["1", "2", "3"]
         with pytest.raises(CannotRemoveElementWithoutRoot):
             sel_list[0].drop()
 
-        self.assertIsSelectorList(sel.css("li"))
-        assert sel.css("li::text").getall() == ["1", "2", "3"]
+        self.assertIsSelectorList(sel.css({"raw": "li"}))
+        assert sel.css({"raw": "li::text"}).getall() == ["1", "2", "3"]
 
     def test_remove_root_element_selector(self) -> None:
         sel = self.sscls(
             text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
         )
-        sel_list = sel.css("li::text")
+        sel_list = sel.css({"raw": "li::text"})
         assert sel_list.getall() == ["1", "2", "3"]
         with pytest.raises(CannotRemoveElementWithoutParent):
             sel.drop()
 
         with pytest.raises(CannotRemoveElementWithoutParent):
-            sel.css("html").drop()
+            sel.css({"raw": "html"}).drop()
 
-        self.assertIsSelectorList(sel.css("li"))
-        assert sel.css("li::text").getall() == ["1", "2", "3"]
+        self.assertIsSelectorList(sel.css({"raw": "li"}))
+        assert sel.css({"raw": "li::text"}).getall() == ["1", "2", "3"]
 
-        sel.css("body").drop()
+        sel.css({"raw": "body"}).drop()
         assert sel.get() == "<html></html>"
 
     def test_deep_nesting(self) -> None:
@@ -991,22 +991,22 @@ class TestSelector:
             with warnings.catch_warnings(record=True) as w:
                 sel = Selector(text=content)
                 assert "huge_tree" in str(w[0].message)
-                assert len(sel.css("span")) <= 256
-                assert len(sel.css("td")) == 0
+                assert len(sel.css({"raw": "span"})) <= 256
+                assert len(sel.css({"raw": "td"})) == 0
             return
 
         # Same goes for explicitly disabling huge trees
         with warnings.catch_warnings(record=True) as w:
             sel = Selector(text=content, huge_tree=False)
             assert "huge_tree" in str(w[0].message)
-            assert len(sel.css("span")) <= 256
-            assert len(sel.css("td")) == 0
+            assert len(sel.css({"raw": "span"})) <= 256
+            assert len(sel.css({"raw": "td"})) == 0
 
         # If huge trees are enabled, elements with a depth > 255 should be found
         sel = Selector(text=content)
         nest_level = 282
-        assert len(sel.css("span")) == nest_level
-        assert len(sel.css("td")) == 1
+        assert len(sel.css({"raw": "span"})) == nest_level
+        assert len(sel.css({"raw": "td"})) == 1
 
     def test_invalid_type(self) -> None:
         with pytest.raises(ValueError, match="Invalid type: xhtml"):
@@ -1049,7 +1049,7 @@ class TestSelector:
         with pytest.raises(
             ValueError, match="Cannot use css on a Selector of type 'json'"
         ):
-            selector.css("*")
+            selector.css({"raw": "*"})
 
     def test_invalid_json(self) -> None:
         text = "<html/>"
@@ -1205,7 +1205,7 @@ class TestExslt:
         sel = self.sscls(
             text="<html><body>Text before.<span>Text in.</span> Text after.</body></html>"
         )
-        sel.css("span").drop()
+        sel.css({"raw": "span"}).drop()
         assert sel.get() == "<html><body>Text before. Text after.</body></html>"
 
     def test_drop_with_xml_type(self) -> None:

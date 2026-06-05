@@ -49,18 +49,18 @@ Example (`open online demo`_):
     ...     </body>
     ... </html>"""
     >>> selector = Selector(text=text)
-    >>> selector.css("h1::text").get()
+    >>> selector.css({"raw": "h1::text"}).get()
     'Hello, Parsel!'
     >>> selector.xpath("//h1/text()").re(r"\w+")
     ['Hello', 'Parsel']
-    >>> for li in selector.css("ul > li"):
+    >>> for li in selector.css({"raw": "ul > li"}):
     ...     print(li.xpath(".//@href").get())
     ...
     http://example.com
     http://scrapy.org
-    >>> selector.css("script::text").jmespath("a").get()
+    >>> selector.css({"raw": "script::text"}).jmespath("a").get()
     'b'
-    >>> selector.css("script::text").jmespath("a").getall()
+    >>> selector.css({"raw": "script::text"}).jmespath("a").getall()
     ['b', 'c']
 
 .. _CSS: https://en.wikipedia.org/wiki/Cascading_Style_Sheets

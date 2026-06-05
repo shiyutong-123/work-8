@@ -22,7 +22,7 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -99,7 +99,7 @@ def create_root_node(
     if not text:
         body = body.replace(b"\x00", b"").strip()
     else:
-        body = text.strip().replace("\x00", "").encode(encoding) or b"<html/>"
+        body = _sanitize_query({"raw": text}).encode(encoding) or b"<html/>"
 
     if huge_tree and LXML_SUPPORTS_HUGE_TREE:
         parser = parser_cls(recover=True, encoding=encoding, huge_tree=True)
@@ -184,7 +184,7 @@ class SelectorList(list[_SelectorType]):
             flatten([x.xpath(xpath, namespaces=namespaces, **kwargs) for x in self])
         )
 
-    def css(self, query: str) -> SelectorList[_SelectorType]:
+    def css(self, query: dict[str, str]) -> SelectorList[_SelectorType]:
         """
         Call the ``.css()`` method for each element in this list and return
         their results flattened as another :class:`SelectorList`.
@@ -622,11 +622,11 @@ class Selector:
         ]
         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
 
-    def css(self, query: str) -> SelectorList[Self]:
+    def css(self, query: dict[str, str]) -> SelectorList[Self]:
         """
         Apply the given CSS selector and return a :class:`SelectorList` instance.
 
-        ``query`` is a string containing the CSS selector to apply.
+        ``query`` is a dict containing the CSS selector to apply, e.g. ``{'raw': 'div.content'}``.
 
         In the background, CSS queries are translated into XPath queries using
         `cssselect`_ library and run ``.xpath()`` method.
@@ -637,9 +637,9 @@ class Selector:
             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
         return self.xpath(self._css2xpath(query))
 
-    def _css2xpath(self, query: str) -> str:
+    def _css2xpath(self, query: dict[str, str]) -> str:
         type_ = _xml_or_html(self.type)
-        return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+        return _ctgroup[type_]["_csstranslator"].css_to_xpath(_sanitize_query(query))
 
     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
         """

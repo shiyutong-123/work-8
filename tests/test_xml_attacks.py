@@ -21,7 +21,7 @@ def test_billion_laughs() -> None:
     process = Process()
     memory_usage_before = process.memory_info().rss
     selector = Selector(text=_load("billion_laughs"))
-    lolz = selector.css("lolz::text").get()
+    lolz = selector.css({"raw": "lolz::text"}).get()
     memory_usage_after = process.memory_info().rss
     memory_change = memory_usage_after - memory_usage_before
     assert_message = f"Memory change: {memory_change}B"

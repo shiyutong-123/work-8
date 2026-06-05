@@ -11,7 +11,7 @@ def correct() -> None:
         text="<html><body><ul><li>1</li><li>2</li><li>3</li></ul></body></html>"
     )
 
-    li_values: list[str] = selector.css("li").getall()
+    li_values: list[str] = selector.css({"raw": "li"}).getall()
     selector.re_first(re.compile(r"[32]"), "").strip()
     xpath_values: list[str] = selector.xpath(
         "//somens:a/text()", namespaces={"somens": "http://scrapy.org"}
@@ -39,7 +39,7 @@ def incorrect() -> None:
     selector.css(5).getall()  # type: ignore[arg-type]
 
     # Cannot assign a list of str to an int.
-    li_values: int = selector.css("li").getall()  # type: ignore[assignment]
+    li_values: int = selector.css({"raw": "li"}).getall()  # type: ignore[assignment]
 
     # Cannot use a string to define namespaces in xpath.
     selector.xpath(
@@ -48,7 +48,7 @@ def incorrect() -> None:
     ).extract()
 
     # Typo in the extract method name.
-    selector.css("li").extact()  # type: ignore[attr-defined]
+    selector.css({"raw": "li"}).extact()  # type: ignore[attr-defined]
 
     class MySelector(Selector):
         def my_own_func(self) -> int:
