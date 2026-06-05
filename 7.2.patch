@@ -1,0 +1,466 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..b1a51ad 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -1,7 +1,6 @@
+ from __future__ import annotations
+ 
+ from functools import lru_cache
+-from typing import TYPE_CHECKING, Any, Protocol
+ 
+ from cssselect import GenericTranslator as OriginalGenericTranslator
+ from cssselect import HTMLTranslator as OriginalHTMLTranslator
+@@ -9,12 +8,10 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
+-if TYPE_CHECKING:
+-    # typing.Self requires Python 3.11
+-    from typing_extensions import Self
++from .selector import Type
+ 
+ 
+-class XPathExpr(OriginalXPathExpr):
++class XPathExpr(Type, OriginalXPathExpr):
+     textnode: bool = False
+     attribute: str | None = None
+ 
+@@ -24,7 +21,7 @@ class XPathExpr(OriginalXPathExpr):
+         xpath: OriginalXPathExpr,
+         textnode: bool = False,
+         attribute: str | None = None,
+-    ) -> Self:
++    ) -> XPathExpr:
+         x = cls(path=xpath.path, element=xpath.element, condition=xpath.condition)
+         x.textnode = textnode
+         x.attribute = attribute
+@@ -48,12 +45,12 @@ class XPathExpr(OriginalXPathExpr):
+         return path
+ 
+     def join(
+-        self: Self,
++        self,
+         combiner: str,
+         other: OriginalXPathExpr,
+-        *args: Any,
+-        **kwargs: Any,
+-    ) -> Self:
++        *args: object,
++        **kwargs: object,
++    ) -> XPathExpr:
+         if not isinstance(other, XPathExpr):
+             raise ValueError(
+                 f"Expressions of type {__name__}.XPathExpr can ony join expressions"
+@@ -65,16 +62,15 @@ class XPathExpr(OriginalXPathExpr):
+         return self
+ 
+ 
+-# e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
+-class TranslatorProtocol(Protocol):
++class TranslatorProtocol(Type):
+     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
+-        pass
++        raise NotImplementedError
+ 
+-    def css_to_xpath(self, css: str, prefix: str = ...) -> str:
+-        pass
++    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
++        raise NotImplementedError
+ 
+ 
+-class TranslatorMixin:
++class TranslatorMixin(Type):
+     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
+ 
+     Currently supported pseudo-elements are ``::text`` and ``::attr(ATTR_NAME)``.
+@@ -126,13 +122,13 @@ class TranslatorMixin:
+         return XPathExpr.from_xpath(xpath, textnode=True)
+ 
+ 
+-class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
++class GenericTranslator(Type, TranslatorMixin, OriginalGenericTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+ 
+ 
+-class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
++class HTMLTranslator(Type, TranslatorMixin, OriginalHTMLTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+         return super().css_to_xpath(css, prefix)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..6942b61 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -4,41 +4,34 @@ packages."""
+ from __future__ import annotations
+ 
+ import json
+-import typing
+ import warnings
++from collections.abc import Mapping
+ from io import BytesIO
+-from typing import (
+-    TYPE_CHECKING,
+-    Any,
+-    Literal,
+-    SupportsIndex,
+-    TypeAlias,
+-    TypedDict,
+-    TypeVar,
+-)
++from re import Pattern
+ 
+ import jmespath
+ from lxml import etree, html
+ from packaging.version import Version
+ 
+-from .csstranslator import GenericTranslator, HTMLTranslator
+-from .utils import extract_regex, flatten, iflatten, shorten
+ 
+-if TYPE_CHECKING:
+-    from collections.abc import Mapping
+-    from re import Pattern
++class Type:
++    def __class_getitem__(cls, _: object) -> type[Type]:
++        return cls
++
+ 
+-    # typing.Self requires Python 3.11
+-    from typing_extensions import Self
++def cast(_: object, value: object) -> object:
++    return value
++
++
++class _SelectorType(Type):
++    pass
+ 
+ 
+-_SelectorType = TypeVar("_SelectorType", bound="Selector")
+-_ParserType: TypeAlias = etree.XMLParser | etree.HTMLParser
+-# simplified _OutputMethodArg from types-lxml
+-_TostringMethodType = Literal[
+-    "html",
+-    "xml",
+-]
++_ParserType = etree.XMLParser | etree.HTMLParser
++_TostringMethodType = str
++
++from .csstranslator import GenericTranslator, HTMLTranslator
++from .utils import extract_regex, flatten, iflatten, shorten
+ 
+ lxml_version = Version(etree.__version__)
+ lxml_huge_tree_version = Version("4.2")
+@@ -58,15 +51,12 @@ class CannotDropElementWithoutParent(CannotRemoveElementWithoutParent):
+ 
+ 
+ class SafeXMLParser(etree.XMLParser):
+-    def __init__(self, *args: Any, **kwargs: Any) -> None:
++    def __init__(self, *args: object, **kwargs: object) -> None:
+         kwargs.setdefault("resolve_entities", False)
+         super().__init__(*args, **kwargs)
+ 
+ 
+-class CTGroupValue(TypedDict):
+-    _parser: type[etree.XMLParser | html.HTMLParser]
+-    _csstranslator: GenericTranslator | HTMLTranslator
+-    _tostring_method: _TostringMethodType
++CTGroupValue = dict[str, object]
+ 
+ 
+ _ctgroup: dict[str, CTGroupValue] = {
+@@ -119,32 +109,22 @@ def create_root_node(
+     return root
+ 
+ 
+-class SelectorList(list[_SelectorType]):
++class SelectorList(Type["_SelectorType"], list):
+     """
+     The :class:`SelectorList` class is a subclass of the builtin ``list``
+     class, which provides a few additional methods.
+     """
+ 
+-    @typing.overload
+-    def __getitem__(self, pos: SupportsIndex) -> _SelectorType:
+-        pass
+-
+-    @typing.overload
+-    def __getitem__(self, pos: slice) -> SelectorList[_SelectorType]:
+-        pass
+-
+-    def __getitem__(
+-        self, pos: SupportsIndex | slice
+-    ) -> _SelectorType | SelectorList[_SelectorType]:
++    def __getitem__(self, pos: int | slice) -> object:
+         o = super().__getitem__(pos)
+         if isinstance(pos, slice):
+-            return self.__class__(typing.cast("SelectorList[_SelectorType]", o))
+-        return typing.cast("_SelectorType", o)
++            return self.__class__(cast("SelectorList[_SelectorType]", o))
++        return cast("_SelectorType", o)
+ 
+     def __getstate__(self) -> None:
+         raise TypeError("can't pickle SelectorList objects")
+ 
+-    def jmespath(self, query: str, **kwargs: Any) -> SelectorList[_SelectorType]:
++    def jmespath(self, query: str, **kwargs: object) -> SelectorList[_SelectorType]:
+         """
+         Call the ``.jmespath()`` method for each element in this list and return
+         their results flattened as another :class:`SelectorList`.
+@@ -162,7 +142,7 @@ class SelectorList(list[_SelectorType]):
+         self,
+         xpath: str,
+         namespaces: Mapping[str, str] | None = None,
+-        **kwargs: Any,
++        **kwargs: object,
+     ) -> SelectorList[_SelectorType]:
+         """
+         Call the ``.xpath()`` method for each element in this list and return
+@@ -205,24 +185,6 @@ class SelectorList(list[_SelectorType]):
+         """
+         return flatten([x.re(regex, replace_entities=replace_entities) for x in self])
+ 
+-    @typing.overload
+-    def re_first(
+-        self,
+-        regex: str | Pattern[str],
+-        default: None = None,
+-        replace_entities: bool = True,
+-    ) -> str | None:
+-        pass
+-
+-    @typing.overload
+-    def re_first(
+-        self,
+-        regex: str | Pattern[str],
+-        default: str,
+-        replace_entities: bool = True,
+-    ) -> str:
+-        pass
+-
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -243,7 +205,7 @@ class SelectorList(list[_SelectorType]):
+         for el in iflatten(
+             x.re(regex, replace_entities=replace_entities) for x in self
+         ):
+-            return typing.cast("str", el)
++            return cast("str", el)
+         return default
+ 
+     def getall(self) -> list[str]:
+@@ -255,15 +217,7 @@ class SelectorList(list[_SelectorType]):
+ 
+     extract = getall
+ 
+-    @typing.overload
+-    def get(self, default: None = None) -> str | None:
+-        pass
+-
+-    @typing.overload
+-    def get(self, default: str) -> str:
+-        pass
+-
+-    def get(self, default: str | None = None) -> Any:
++    def get(self, default: str | None = None) -> object:
+         """
+         Return the result of ``.get()`` for the first element in this list.
+         If the list is empty, return the default value.
+@@ -294,7 +248,12 @@ class SelectorList(list[_SelectorType]):
+ _NOT_SET = object()
+ 
+ 
+-def _get_root_from_text(text: str, *, type_: str, **lxml_kwargs: Any) -> etree._Element:
++def _get_root_from_text(
++    text: str,
++    *,
++    type_: str,
++    **lxml_kwargs: object,
++) -> etree._Element:
+     return create_root_node(text, _ctgroup[type_]["_parser"], **lxml_kwargs)
+ 
+ 
+@@ -303,8 +262,8 @@ def _get_root_and_type_from_bytes(
+     encoding: str,
+     *,
+     input_type: str | None,
+-    **lxml_kwargs: Any,
+-) -> tuple[Any, str]:
++    **lxml_kwargs: object,
++) -> tuple[object, str]:
+     if input_type == "text":
+         return body.decode(encoding), input_type
+     if encoding == "utf-8":
+@@ -329,8 +288,11 @@ def _get_root_and_type_from_bytes(
+ 
+ 
+ def _get_root_and_type_from_text(
+-    text: str, *, input_type: str | None, **lxml_kwargs: Any
+-) -> tuple[Any, str]:
++    text: str,
++    *,
++    input_type: str | None,
++    **lxml_kwargs: object,
++) -> tuple[object, str]:
+     if input_type == "text":
+         return text, input_type
+     try:
+@@ -347,7 +309,7 @@ def _get_root_and_type_from_text(
+     return root, type_
+ 
+ 
+-def _get_root_type(root: Any, *, input_type: str | None) -> str:
++def _get_root_type(root: object, *, input_type: str | None) -> str:
+     if isinstance(root, etree._Element):
+         if input_type in {"json", "text"}:
+             raise ValueError(
+@@ -368,7 +330,7 @@ def _is_valid_json(text: str) -> bool:
+     return True
+ 
+ 
+-def _load_json_or_none(text: str) -> Any:
++def _load_json_or_none(text: str | bytes | bytearray) -> object | None:
+     if isinstance(text, (str, bytes, bytearray)):
+         try:
+             return json.loads(text)
+@@ -377,7 +339,7 @@ def _load_json_or_none(text: str) -> Any:
+     return None
+ 
+ 
+-class Selector:
++class Selector(Type):
+     """Wrapper for input data in HTML, JSON, or XML format, that allows
+     selecting parts of it using selection expressions.
+ 
+@@ -435,12 +397,12 @@ class Selector:
+         body: bytes | bytearray = b"",
+         encoding: str = "utf-8",
+         namespaces: Mapping[str, str] | None = None,
+-        root: Any | None = _NOT_SET,
++        root: object | None = _NOT_SET,
+         base_url: str | None = None,
+         _expr: str | None = None,
+         huge_tree: bool = LXML_SUPPORTS_HUGE_TREE,
+     ) -> None:
+-        self.root: Any
++        self.root: object
+         if type not in ("html", "json", "text", "xml", None):
+             raise ValueError(f"Invalid type: {type}")
+ 
+@@ -496,7 +458,7 @@ class Selector:
+         self._huge_tree = huge_tree
+         self._text = text
+ 
+-    def __getstate__(self) -> Any:
++    def __getstate__(self) -> object:
+         raise TypeError("can't pickle Selector objects")
+ 
+     def _get_root(
+@@ -520,8 +482,8 @@ class Selector:
+     def jmespath(
+         self,
+         query: str,
+-        **kwargs: Any,
+-    ) -> SelectorList[Self]:
++        **kwargs: object,
++    ) -> SelectorList["Selector"]:
+         """
+         Find objects matching the JMESPath ``query`` and return the result as a
+         :class:`SelectorList` instance with all elements flattened. List
+@@ -551,20 +513,20 @@ class Selector:
+         elif not isinstance(result, list):
+             result = [result]
+ 
+-        def make_selector(x: Any) -> Selector:  # closure function
++        def make_selector(x: object) -> Selector:
+             if isinstance(x, str):
+                 return self.__class__(text=x, _expr=query, type="text")
+             return self.__class__(root=x, _expr=query)
+ 
+         result = [make_selector(x) for x in result]
+-        return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
++        return cast("SelectorList[Selector]", self.selectorlist_cls(result))
+ 
+     def xpath(
+         self,
+         query: str,
+         namespaces: Mapping[str, str] | None = None,
+-        **kwargs: Any,
+-    ) -> SelectorList[Self]:
++        **kwargs: object,
++    ) -> SelectorList["Selector"]:
+         """
+         Find nodes matching the xpath ``query`` and return the result as a
+         :class:`SelectorList` instance with all elements flattened. List
+@@ -588,12 +550,12 @@ class Selector:
+             try:
+                 xpathev = self.root.xpath
+             except AttributeError:
+-                return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
++                return cast("SelectorList[Selector]", self.selectorlist_cls([]))
+         else:
+             try:
+                 xpathev = self._get_root(self._text or "", type_="html").xpath
+             except AttributeError:
+-                return typing.cast("SelectorList[Self]", self.selectorlist_cls([]))
++                return cast("SelectorList[Selector]", self.selectorlist_cls([]))
+ 
+         nsp = dict(self.namespaces)
+         if namespaces is not None:
+@@ -620,9 +582,9 @@ class Selector:
+             )
+             for x in result
+         ]
+-        return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
++        return cast("SelectorList[Selector]", self.selectorlist_cls(result))
+ 
+-    def css(self, query: str) -> SelectorList[Self]:
++    def css(self, query: str) -> SelectorList["Selector"]:
+         """
+         Apply the given CSS selector and return a :class:`SelectorList` instance.
+ 
+@@ -657,24 +619,6 @@ class Selector:
+         data = self.get()
+         return extract_regex(regex, data, replace_entities=replace_entities)
+ 
+-    @typing.overload
+-    def re_first(
+-        self,
+-        regex: str | Pattern[str],
+-        default: None = None,
+-        replace_entities: bool = True,
+-    ) -> str | None:
+-        pass
+-
+-    @typing.overload
+-    def re_first(
+-        self,
+-        regex: str | Pattern[str],
+-        default: str,
+-        replace_entities: bool = True,
+-    ) -> str:
+-        pass
+-
+     def re_first(
+         self,
+         regex: str | Pattern[str],
+@@ -696,7 +640,7 @@ class Selector:
+             default,
+         )
+ 
+-    def get(self) -> Any:
++    def get(self) -> object:
+         """
+         Serialize and return the matched nodes.
+ 
+@@ -775,7 +719,7 @@ class Selector:
+                     raise ValueError("This node has no parent")
+                 parent.remove(self.root)
+             else:
+-                typing.cast("html.HtmlElement", self.root).drop_tree()
++                cast("html.HtmlElement", self.root).drop_tree()
+         except (AttributeError, AssertionError):
+             # 'NoneType' object has no attribute 'drop'
+             raise CannotDropElementWithoutParent(

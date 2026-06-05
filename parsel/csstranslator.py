@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Any, Protocol
 
 from cssselect import GenericTranslator as OriginalGenericTranslator
 from cssselect import HTMLTranslator as OriginalHTMLTranslator
@@ -9,12 +8,10 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
 from cssselect.xpath import ExpressionError
 from cssselect.xpath import XPathExpr as OriginalXPathExpr
 
-if TYPE_CHECKING:
-    # typing.Self requires Python 3.11
-    from typing_extensions import Self
+from .selector import Type
 
 
-class XPathExpr(OriginalXPathExpr):
+class XPathExpr(Type, OriginalXPathExpr):
     textnode: bool = False
     attribute: str | None = None
 
@@ -24,7 +21,7 @@ class XPathExpr(OriginalXPathExpr):
         xpath: OriginalXPathExpr,
         textnode: bool = False,
         attribute: str | None = None,
-    ) -> Self:
+    ) -> XPathExpr:
         x = cls(path=xpath.path, element=xpath.element, condition=xpath.condition)
         x.textnode = textnode
         x.attribute = attribute
@@ -48,12 +45,12 @@ class XPathExpr(OriginalXPathExpr):
         return path
 
     def join(
-        self: Self,
+        self,
         combiner: str,
         other: OriginalXPathExpr,
-        *args: Any,
-        **kwargs: Any,
-    ) -> Self:
+        *args: object,
+        **kwargs: object,
+    ) -> XPathExpr:
         if not isinstance(other, XPathExpr):
             raise ValueError(
                 f"Expressions of type {__name__}.XPathExpr can ony join expressions"
@@ -65,16 +62,15 @@ class XPathExpr(OriginalXPathExpr):
         return self
 
 
-# e.g. cssselect.GenericTranslator, cssselect.HTMLTranslator
-class TranslatorProtocol(Protocol):
+class TranslatorProtocol(Type):
     def xpath_element(self, selector: Element) -> OriginalXPathExpr:
-        pass
+        raise NotImplementedError
 
-    def css_to_xpath(self, css: str, prefix: str = ...) -> str:
-        pass
+    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+        raise NotImplementedError
 
 
-class TranslatorMixin:
+class TranslatorMixin(Type):
     """This mixin adds support to CSS pseudo elements via dynamic dispatch.
 
     Currently supported pseudo-elements are ``::text`` and ``::attr(ATTR_NAME)``.
@@ -126,13 +122,13 @@ class TranslatorMixin:
         return XPathExpr.from_xpath(xpath, textnode=True)
 
 
-class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+class GenericTranslator(Type, TranslatorMixin, OriginalGenericTranslator):
     @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
 
 
-class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+class HTMLTranslator(Type, TranslatorMixin, OriginalHTMLTranslator):
     @lru_cache(maxsize=256)
     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
         return super().css_to_xpath(css, prefix)
