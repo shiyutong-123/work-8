@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import re
+from functools import singledispatch
 from typing import TYPE_CHECKING, Any, cast
 
+from lxml import etree
 from w3lib.html import replace_entities as w3lib_replace_entities
 
 if TYPE_CHECKING:
@@ -41,6 +43,19 @@ def iflatten(x: Iterable[Any]) -> Iterator[Any]:
             yield el
 
 
+@singledispatch
+def _is_str_or_bytes(obj: Any) -> bool:
+    return False
+
+@_is_str_or_bytes.register(str)
+def _is_str_or_bytes_str(obj: str) -> bool:
+    return True
+
+@_is_str_or_bytes.register(bytes)
+def _is_str_or_bytes_bytes(obj: bytes) -> bool:
+    return True
+
+
 def _is_listlike(x: Any) -> bool:
     """
     >>> _is_listlike("foo")
@@ -62,7 +77,7 @@ def _is_listlike(x: Any) -> bool:
     >>> _is_listlike(range(5))
     True
     """
-    return hasattr(x, "__iter__") and not isinstance(x, (str, bytes))
+    return hasattr(x, "__iter__") and not _is_str_or_bytes(x)
 
 
 def extract_regex(
@@ -73,7 +88,7 @@ def extract_regex(
     * if the regex contains multiple numbered groups, all those will be returned (flattened)
     * if the regex doesn't contain any group the entire regex matching is returned
     """
-    if isinstance(regex, str):
+    if _is_str_or_bytes(regex):
         regex = re.compile(regex, re.UNICODE)
 
     if "extract" in regex.groupindex:
@@ -103,3 +118,65 @@ def shorten(text: str, width: int, suffix: str = "...") -> str:
     if width >= 0:
         return suffix[len(suffix) - width :]
     raise ValueError("width must be equal or greater than 0")
+
+
+@singledispatch
+def _is_text_type(obj: Any) -> bool:
+    return False
+
+@_is_text_type.register(str)
+def _is_text_type_str(obj: str) -> bool:
+    return True
+
+
+@singledispatch
+def _is_body_type(obj: Any) -> bool:
+    return False
+
+@_is_body_type.register(bytes)
+def _is_body_type_bytes(obj: bytes) -> bool:
+    return True
+
+@_is_body_type.register(bytearray)
+def _is_body_type_bytearray(obj: bytearray) -> bool:
+    return True
+
+
+@singledispatch
+def _is_lxml_element(obj: Any) -> bool:
+    return False
+
+@_is_lxml_element.register(etree._Element)
+def _is_lxml_element_el(obj: etree._Element) -> bool:
+    return True
+
+
+@singledispatch
+def _is_jsonlike(obj: Any) -> bool:
+    return False
+
+@_is_jsonlike.register(dict)
+def _is_jsonlike_dict(obj: dict) -> bool:
+    return True
+
+@_is_jsonlike.register(list)
+def _is_jsonlike_list(obj: list) -> bool:
+    return True
+
+
+@singledispatch
+def _is_listlike_result(obj: Any) -> bool:
+    return False
+
+@_is_listlike_result.register(list)
+def _is_listlike_result_list(obj: list) -> bool:
+    return True
+
+
+@singledispatch
+def _is_slice(obj: Any) -> bool:
+    return False
+
+@_is_slice.register(slice)
+def _is_slice_slice(obj: slice) -> bool:
+    return True
