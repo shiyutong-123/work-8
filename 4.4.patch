@@ -1,0 +1,72 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..a4bbbeb 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -9,6 +9,8 @@ from cssselect.parser import Element, FunctionalPseudoElement, PseudoElement
+ from cssselect.xpath import ExpressionError
+ from cssselect.xpath import XPathExpr as OriginalXPathExpr
+ 
++from .utils import _sanitize_query
++
+ if TYPE_CHECKING:
+     # typing.Self requires Python 3.11
+     from typing_extensions import Self
+@@ -129,13 +131,13 @@ class TranslatorMixin:
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        return super().css_to_xpath(_sanitize_query({'raw': css}), prefix)
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+     @lru_cache(maxsize=256)
+     def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++        return super().css_to_xpath(_sanitize_query({'raw': css}), prefix)
+ 
+ 
+ _translator = HTMLTranslator()
+@@ -143,4 +145,4 @@ _translator = HTMLTranslator()
+ 
+ def css2xpath(query: str) -> str:
+     """Return translated XPath version of a given CSS query"""
+-    return _translator.css_to_xpath(query)
++    return _translator.css_to_xpath(_sanitize_query({'raw': query}))
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..d44d169 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -22,7 +22,7 @@ from lxml import etree, html
+ from packaging.version import Version
+ 
+ from .csstranslator import GenericTranslator, HTMLTranslator
+-from .utils import extract_regex, flatten, iflatten, shorten
++from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Mapping
+@@ -99,7 +99,7 @@ def create_root_node(
+     if not text:
+         body = body.replace(b"\x00", b"").strip()
+     else:
+-        body = text.strip().replace("\x00", "").encode(encoding) or b"<html/>"
++        body = _sanitize_query({'raw': text}).encode(encoding) or b"<html/>"
+ 
+     if huge_tree and LXML_SUPPORTS_HUGE_TREE:
+         parser = parser_cls(recover=True, encoding=encoding, huge_tree=True)
+diff --git a/parsel/utils.py b/parsel/utils.py
+index 528a163..8085a5f 100644
+--- a/parsel/utils.py
++++ b/parsel/utils.py
+@@ -94,6 +94,10 @@ def extract_regex(
+     return [w3lib_replace_entities(s, keep=["lt", "amp"]) for s in strings]
+ 
+ 
++def _sanitize_query(data: dict[str, str]) -> str:
++    return data["raw"].strip().replace("\x00", "")
++
++
+ def shorten(text: str, width: int, suffix: str = "...") -> str:
+     """Truncate the given text to fit in the given width."""
+     if len(text) <= width:

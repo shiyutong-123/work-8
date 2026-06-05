@@ -22,7 +22,7 @@ from lxml import etree, html
 from packaging.version import Version
 
 from .csstranslator import GenericTranslator, HTMLTranslator
-from .utils import extract_regex, flatten, iflatten, shorten
+from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -99,7 +99,7 @@ def create_root_node(
     if not text:
         body = body.replace(b"\x00", b"").strip()
     else:
-        body = text.strip().replace("\x00", "").encode(encoding) or b"<html/>"
+        body = _sanitize_query({'raw': text}).encode(encoding) or b"<html/>"
 
     if huge_tree and LXML_SUPPORTS_HUGE_TREE:
         parser = parser_cls(recover=True, encoding=encoding, huge_tree=True)
