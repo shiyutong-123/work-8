@@ -128,19 +128,21 @@ class TranslatorMixin:
 
 class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+    def css_to_xpath(self, css: dict, prefix: str = "descendant-or-self::") -> str:
+        css_str = _sanitize_query(css)
+        return super().css_to_xpath(css_str, prefix)
 
 
 class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
     @lru_cache(maxsize=256)
-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
-        return super().css_to_xpath(css, prefix)
+    def css_to_xpath(self, css: dict, prefix: str = "descendant-or-self::") -> str:
+        css_str = _sanitize_query(css)
+        return super().css_to_xpath(css_str, prefix)
 
 
 _translator = HTMLTranslator()
 
 
-def css2xpath(query: str) -> str:
+def css2xpath(query: dict) -> str:
     """Return translated XPath version of a given CSS query"""
     return _translator.css_to_xpath(query)

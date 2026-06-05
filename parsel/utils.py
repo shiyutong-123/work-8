@@ -9,6 +9,13 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Iterator
 
 
+def _sanitize_query(data: dict) -> str:
+    """Extract and sanitize query string from data dictionary."""
+    if not isinstance(data, dict) or 'raw' not in data:
+        raise ValueError("data must be a dict {'raw': string}")
+    return data['raw']
+
+
 def flatten(x: Iterable[Any]) -> list[Any]:
     """flatten(sequence) -> list
     Returns a single, flat list which contains all elements retrieved

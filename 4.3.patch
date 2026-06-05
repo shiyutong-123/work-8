@@ -1,0 +1,205 @@
+diff --git a/parsel/csstranslator.py b/parsel/csstranslator.py
+index 61d79a4..5c9da7f 100644
+--- a/parsel/csstranslator.py
++++ b/parsel/csstranslator.py
+@@ -128,19 +128,21 @@ class TranslatorMixin:
+ 
+ class GenericTranslator(TranslatorMixin, OriginalGenericTranslator):
+     @lru_cache(maxsize=256)
+-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++    def css_to_xpath(self, css: dict, prefix: str = "descendant-or-self::") -> str:
++        css_str = _sanitize_query(css)
++        return super().css_to_xpath(css_str, prefix)
+ 
+ 
+ class HTMLTranslator(TranslatorMixin, OriginalHTMLTranslator):
+     @lru_cache(maxsize=256)
+-    def css_to_xpath(self, css: str, prefix: str = "descendant-or-self::") -> str:
+-        return super().css_to_xpath(css, prefix)
++    def css_to_xpath(self, css: dict, prefix: str = "descendant-or-self::") -> str:
++        css_str = _sanitize_query(css)
++        return super().css_to_xpath(css_str, prefix)
+ 
+ 
+ _translator = HTMLTranslator()
+ 
+ 
+-def css2xpath(query: str) -> str:
++def css2xpath(query: dict) -> str:
+     """Return translated XPath version of a given CSS query"""
+     return _translator.css_to_xpath(query)
+diff --git a/parsel/selector.py b/parsel/selector.py
+index 907c118..e02038b 100644
+--- a/parsel/selector.py
++++ b/parsel/selector.py
+@@ -22,7 +22,7 @@ from lxml import etree, html
+ from packaging.version import Version
+ 
+ from .csstranslator import GenericTranslator, HTMLTranslator
+-from .utils import extract_regex, flatten, iflatten, shorten
++from .utils import _sanitize_query, extract_regex, flatten, iflatten, shorten
+ 
+ if TYPE_CHECKING:
+     from collections.abc import Mapping
+@@ -160,7 +160,7 @@ class SelectorList(list[_SelectorType]):
+ 
+     def xpath(
+         self,
+-        xpath: str,
++        xpath: dict,
+         namespaces: Mapping[str, str] | None = None,
+         **kwargs: Any,
+     ) -> SelectorList[_SelectorType]:
+@@ -178,19 +178,21 @@ class SelectorList(list[_SelectorType]):
+         Any additional named arguments can be used to pass values for XPath
+         variables in the XPath expression, e.g.::
+ 
+-            selector.xpath('//a[href=$url]', url="http://www.example.com")
++            selector.xpath({'raw': '//a[href=$url]'}, url="http://www.example.com")
+         """
++        _sanitize_query(xpath)
+         return self.__class__(
+             flatten([x.xpath(xpath, namespaces=namespaces, **kwargs) for x in self])
+         )
+ 
+-    def css(self, query: str) -> SelectorList[_SelectorType]:
++    def css(self, query: dict) -> SelectorList[_SelectorType]:
+         """
+         Call the ``.css()`` method for each element in this list and return
+         their results flattened as another :class:`SelectorList`.
+ 
+         ``query`` is the same argument as the one in :meth:`Selector.css`
+         """
++        _sanitize_query(query)
+         return self.__class__(flatten([x.css(query) for x in self]))
+ 
+     def re(self, regex: str | Pattern[str], replace_entities: bool = True) -> list[str]:
+@@ -519,7 +521,7 @@ class Selector:
+ 
+     def jmespath(
+         self,
+-        query: str,
++        query: dict,
+         **kwargs: Any,
+     ) -> SelectorList[Self]:
+         """
+@@ -533,8 +535,9 @@ class Selector:
+         Any additional named arguments are passed to the underlying
+         ``jmespath.search`` call, e.g.::
+ 
+-            selector.jmespath('author.name', options=jmespath.Options(dict_cls=collections.OrderedDict))
++            selector.jmespath({'raw': 'author.name'}, options=jmespath.Options(dict_cls=collections.OrderedDict))
+         """
++        query_str = _sanitize_query(query)
+         if self.type == "json":
+             if isinstance(self.root, str):
+                 # Selector received a JSON string as root.
+@@ -545,7 +548,7 @@ class Selector:
+             assert self.type in {"html", "xml"}  # nosec
+             data = _load_json_or_none(self.root.text)
+ 
+-        result = jmespath.search(query, data, **kwargs)
++        result = jmespath.search(query_str, data, **kwargs)
+         if result is None:
+             result = []
+         elif not isinstance(result, list):
+@@ -553,15 +556,15 @@ class Selector:
+ 
+         def make_selector(x: Any) -> Selector:  # closure function
+             if isinstance(x, str):
+-                return self.__class__(text=x, _expr=query, type="text")
+-            return self.__class__(root=x, _expr=query)
++                return self.__class__(text=x, _expr=query_str, type="text")
++            return self.__class__(root=x, _expr=query_str)
+ 
+         result = [make_selector(x) for x in result]
+         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
+ 
+     def xpath(
+         self,
+-        query: str,
++        query: dict,
+         namespaces: Mapping[str, str] | None = None,
+         **kwargs: Any,
+     ) -> SelectorList[Self]:
+@@ -580,8 +583,9 @@ class Selector:
+         Any additional named arguments can be used to pass values for XPath
+         variables in the XPath expression, e.g.::
+ 
+-            selector.xpath('//a[href=$url]', url="http://www.example.com")
++            selector.xpath({'raw': '//a[href=$url]'}, url="http://www.example.com")
+         """
++        query_str = _sanitize_query(query)
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use xpath on a Selector of type {self.type!r}")
+         if self.type in ("html", "xml"):
+@@ -600,13 +604,13 @@ class Selector:
+             nsp.update(namespaces)
+         try:
+             result = xpathev(
+-                query,
++                query_str,
+                 namespaces=nsp,
+                 smart_strings=self._lxml_smart_strings,
+                 **kwargs,
+             )
+         except etree.XPathError as exc:
+-            raise ValueError(f"XPath error: {exc} in {query}")
++            raise ValueError(f"XPath error: {exc} in {query_str}")
+ 
+         if not isinstance(result, list):
+             result = [result]
+@@ -614,7 +618,7 @@ class Selector:
+         result = [
+             self.__class__(
+                 root=x,
+-                _expr=query,
++                _expr=query_str,
+                 namespaces=self.namespaces,
+                 type=_xml_or_html(self.type),
+             )
+@@ -622,7 +626,7 @@ class Selector:
+         ]
+         return typing.cast("SelectorList[Self]", self.selectorlist_cls(result))
+ 
+-    def css(self, query: str) -> SelectorList[Self]:
++    def css(self, query: dict) -> SelectorList[Self]:
+         """
+         Apply the given CSS selector and return a :class:`SelectorList` instance.
+ 
+@@ -635,9 +639,9 @@ class Selector:
+         """
+         if self.type not in ("html", "xml", "text"):
+             raise ValueError(f"Cannot use css on a Selector of type {self.type!r}")
+-        return self.xpath(self._css2xpath(query))
++        return self.xpath({'raw': self._css2xpath(query)})
+ 
+-    def _css2xpath(self, query: str) -> str:
++    def _css2xpath(self, query: dict) -> str:
+         type_ = _xml_or_html(self.type)
+         return _ctgroup[type_]["_csstranslator"].css_to_xpath(query)
+ 
+@@ -810,3 +814,4 @@ class Selector:
+     def __repr__(self) -> str:
+         data = repr(shorten(str(self.get()), width=40))
+         return f"<{type(self).__name__} query={self._expr!r} data={data}>"
++        return f"<{type(self).__name__} query={self._expr!r} data={data}>"
+diff --git a/parsel/utils.py b/parsel/utils.py
+index 528a163..aeb83d0 100644
+--- a/parsel/utils.py
++++ b/parsel/utils.py
+@@ -9,6 +9,13 @@ if TYPE_CHECKING:
+     from collections.abc import Iterable, Iterator
+ 
+ 
++def _sanitize_query(data: dict) -> str:
++    """Extract and sanitize query string from data dictionary."""
++    if not isinstance(data, dict) or 'raw' not in data:
++        raise ValueError("data must be a dict {'raw': string}")
++    return data['raw']
++
++
+ def flatten(x: Iterable[Any]) -> list[Any]:
+     """flatten(sequence) -> list
+     Returns a single, flat list which contains all elements retrieved
